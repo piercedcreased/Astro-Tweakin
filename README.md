@@ -21,7 +21,7 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | ⛏️ Mine | Rolls for ores. Each ore has a "1 in N" chance and your luck divides N. |
 | 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, haste or double dig. |
 | 💰 Sell | Sells ores. Keeps Epic+ ores, bars and the materials for your next pickaxe. |
-| 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt all, or fenced. |
+| 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt everything, or fenced. |
 | 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars. |
 | 🔧 Workshop | Build rocket parts (fuel, hull, nav computer, oxygen, warp core...) from ores. |
 | 🐌 Collect | Sluglings dig 1 ore a minute each while you're offline (up to 12h). |

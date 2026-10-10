@@ -397,9 +397,9 @@ def ascend(db, uid):
 
 
 @atomic
-def smelt_all(db, uid, only=None):
+def smelt_all(db, uid, only=None, limit=None):
     """Smelts every bar ore you have enough of. only=[ore keys] smelts just those (even if locked);
-    otherwise locked ores are skipped."""
+    otherwise locked ores are skipped. limit caps how many bars of each type get made."""
     user = db.user(uid)
     made = {}
     fee = 0
@@ -411,6 +411,8 @@ def smelt_all(db, uid, only=None):
             continue
         have = db.qty(uid, "ore:" + bar)
         n = have // data.ORE_PER_BAR
+        if limit is not None:
+            n = min(n, limit)
         if n <= 0:
             continue
         coins_left = user["coins"] - fee

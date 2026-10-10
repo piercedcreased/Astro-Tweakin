@@ -299,7 +299,7 @@ class DB:
             luck, time.time() + seconds, label,
         )
 
-    # locked items are never sold, smelted by "Smelt all" or fenced
+    # locked items are never sold, smelted by "Smelt everything" or fenced
     def locked(self, uid):
         return {r["item"] for r in self.q("SELECT item FROM locks WHERE user_id=?", uid)}
 

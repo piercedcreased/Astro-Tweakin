@@ -201,8 +201,8 @@ class Game(commands.Cog):
                     value=f"{cost:,} coins · digs 1 ore/min while you're away (up to {data.COLLECT_CAP_HOURS}h)", inline=False)
         smeltable = ", ".join(f"{self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR}x {n}"
                               for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR)
-        e.add_field(name="🔥 Smelt", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more. "
-                    "Smelt all skips 🔒 locked ores, or pick exactly which ones below."
+        e.add_field(name="🔥 Smelter", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more. "
+                    "Open the Smelter to pick which bars to make."
                     + (f"\nReady: {smeltable}" if smeltable else ""), inline=False)
         if note:
             e.description = note
@@ -211,19 +211,34 @@ class Game(commands.Cog):
         v.add_item(B("buypick", uid, "Craft pickaxe", "⛏️", discord.ButtonStyle.success, disabled=nxt is None))
         v.add_item(B("dig", uid, go_label[:80], go_emoji, discord.ButtonStyle.success, disabled=user["max_layer"] >= len(LAYERS)))
         v.add_item(B("hire", uid, "Hire slugling", "🐌", discord.ButtonStyle.success))
-        v.add_item(B("smelt", uid, "Smelt all", "🔥"))
+        v.add_item(B("smelter", uid, "Smelter", "🔥"))
         v.add_item(B("workshop", uid, "Workshop", "🔧", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
-        locked = self.db.locked(uid)
-        opts = [discord.SelectOption(label=f"{n} ({self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR} bars)", value=b,
-                                     description=f"{self.db.qty(uid, 'ore:' + b):,} ore" + (" · locked, Smelt all skips it" if 'ore:' + b in locked else ""))
-                for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR]
-        if opts:
-            v.add_item(PanelSelect("smeltpick", uid, opts, "🔥 Pick which ores to smelt...", row=2))
         banner = images.shop_banner(user["coins"], engine.goals(self.db, uid), nxt)
         files = [discord.File(io.BytesIO(banner), filename="shop.jpg")]
         e.set_image(url="attachment://shop.jpg")
         return e, files, v
+
+    def smelter_panel(self, uid, note=None):
+        user = self.db.user(uid)
+        e = discord.Embed(title="🔥 Smelter", color=discord.Color.from_rgb(255, 120, 40),
+                          description=(note + "\n\n" if note else "") +
+                          f"Pick which bars to make. Each bar takes {data.ORE_PER_BAR} ore plus a small coin fee.")
+        v = discord.ui.View(timeout=None)
+        for b, (name, fee) in data.BARS.items():
+            ore = self.db.qty(uid, "ore:" + b)
+            can = ore // data.ORE_PER_BAR
+            if fee:
+                can = min(can, user["coins"] // fee)
+            e.add_field(name=name, value=f"{ore:,} {ORE_BY_KEY[b].name} ore · can make **{can:,}**\n"
+                                         f"{fee:,} coins each · you have {self.db.qty(uid, 'bar:' + b):,} bars", inline=True)
+            short = name.replace(" Bar", "")
+            v.add_item(B(f"smeltall_{b}", uid, f"All {short} ({can:,})", "🔥", discord.ButtonStyle.success, disabled=can <= 0, row=0))
+            v.add_item(B(f"smeltone_{b}", uid, f"1 {name}", "🧱", disabled=can <= 0, row=1))
+        e.set_footer(text=f"You have {user['coins']:,} coins · Smelt everything skips 🔒 locked ores")
+        v.add_item(B("smelt", uid, "Smelt everything", "🔥", row=2))
+        v.add_item(B("shop", uid, "Back to shop", "↩️", row=2))
+        return e, [], v
 
     def workshop_panel(self, uid, note=None):
         user = self.db.user(uid)
@@ -330,6 +345,9 @@ class Game(commands.Cog):
             pass
 
     async def dispatch_action(self, interaction, action, uid):
+        if action.startswith(("smeltall_", "smeltone_")) and action[9:] in data.BARS:
+            await self.do_smelt(interaction, uid, only=[action[9:]], limit=1 if action.startswith("smeltone_") else None)
+            return
         if action.startswith("mk_") and action[3:] in PART_BY_KEY:
             ok, msg = engine.craft_part(self.db, uid, action[3:])
             await self.show(interaction, self.workshop_panel(uid, note=("✅ " if ok else "❌ ") + msg))
@@ -502,12 +520,8 @@ class Game(commands.Cog):
         ok, msg = engine.hire_slugling(self.db, uid)
         await self.show(interaction, self.shop_panel(uid, note=("✅ " if ok else "❌ ") + msg))
 
-    async def do_smeltpick(self, interaction, uid):
-        picked = [b for b in interaction.extras.get("values", []) if b in data.BARS]
-        if not picked:
-            await self.show(interaction, self.shop_panel(uid))
-            return
-        await self.do_smelt(interaction, uid, only=picked)
+    async def do_smelter(self, interaction, uid):
+        await self.show(interaction, self.smelter_panel(uid))
 
     async def do_lockpick(self, interaction, uid):
         on, off = engine.toggle_locks(self.db, uid, interaction.extras.get("values", []))
@@ -518,14 +532,14 @@ class Game(commands.Cog):
             parts.append("🔓 Unlocked " + ", ".join(off))
         await self.show(interaction, self.inventory_panel(uid, note=". ".join(parts) or None))
 
-    async def do_smelt(self, interaction, uid, only=None):
-        made, fee = engine.smelt_all(self.db, uid, only=only)
+    async def do_smelt(self, interaction, uid, only=None, limit=None):
+        made, fee = engine.smelt_all(self.db, uid, only=only, limit=limit)
         if made:
             note = "🔥 Smelted " + ", ".join(f"{n}x {k}" for k, n in made.items()) + f" for {fee:,} coins."
         else:
             note = (f"❌ You need {data.ORE_PER_BAR} of an ore (copper, tin, iron, silver or gold) and the coin fee to smelt a bar."
-                    + (" Smelt all skips 🔒 locked ores, so pick them from the menu." if only is None and self.db.locked(uid) else ""))
-        await self.show(interaction, self.shop_panel(uid, note=note))
+                    + (" Smelt everything skips 🔒 locked ores, so use the buttons above for those." if only is None and self.db.locked(uid) else ""))
+        await self.show(interaction, self.smelter_panel(uid, note=note))
 
     async def do_rebirthyes(self, interaction, uid):
         ok, msg = engine.rebirth(self.db, uid)
@@ -701,7 +715,7 @@ class Game(commands.Cog):
             await interaction.response.send_message("You don't have that item. Pick one from the list as you type.", ephemeral=True)
             return
         on, off = engine.toggle_locks(self.db, uid, [item])
-        msg = f"🔒 **{on[0]}** is locked. Sell, auto-sell, Smelt all and Tim won't touch it." if on else \
+        msg = f"🔒 **{on[0]}** is locked. Sell, auto-sell, Smelt everything and Tim won't touch it." if on else \
             f"🔓 **{off[0]}** is unlocked." if off else "That item can't be locked."
         await interaction.response.send_message(msg, ephemeral=True)
 
