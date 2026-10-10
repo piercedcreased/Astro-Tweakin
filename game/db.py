@@ -79,6 +79,41 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS stats (
+    user_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS bounties (
+    user_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    need INTEGER NOT NULL,
+    base INTEGER NOT NULL,
+    reward INTEGER NOT NULL,
+    claimed INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day, idx)
+);
+CREATE TABLE IF NOT EXISTS achievements (
+    user_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    at REAL NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+CREATE TABLE IF NOT EXISTS raids (
+    attacker INTEGER NOT NULL,
+    target INTEGER NOT NULL,
+    at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS claims (
+    kind TEXT NOT NULL,
+    event INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    at REAL NOT NULL,
+    PRIMARY KEY (kind, event, user_id)
+);
 """
 
 # Columns added in later versions get listed here, so old save files are upgraded in place
@@ -87,6 +122,13 @@ MIGRATIONS = [
     ("users", "autosell", "INTEGER NOT NULL DEFAULT 0"),          # v0.2.0
     ("users", "daily_last", "REAL NOT NULL DEFAULT 0"),           # v0.2.0
     ("users", "daily_streak", "INTEGER NOT NULL DEFAULT 0"),      # v0.2.0
+    ("users", "title", "TEXT"),                                   # v0.3.0
+    ("users", "ship_stash", "INTEGER NOT NULL DEFAULT 0"),        # v0.3.0
+    ("users", "ship_hull", "INTEGER NOT NULL DEFAULT 0"),         # v0.3.0
+    ("users", "ship_engine", "INTEGER NOT NULL DEFAULT 0"),       # v0.3.0
+    ("users", "ship_paint", "INTEGER NOT NULL DEFAULT 0"),        # v0.3.0
+    ("users", "last_check", "REAL NOT NULL DEFAULT 0"),           # v0.3.0
+    ("users", "last_raid", "REAL NOT NULL DEFAULT 0"),            # v0.3.0
 ]
 
 
@@ -242,6 +284,37 @@ class DB:
             "ON CONFLICT(id) DO UPDATE SET luck=excluded.luck, expires=excluded.expires, label=excluded.label",
             luck, time.time() + seconds, label,
         )
+
+    # counters for bounties and achievements ("mined", "raids", ...)
+    def bump(self, uid, key, n=1):
+        if n:
+            self.run(
+                "INSERT INTO stats (user_id, key, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, key) DO UPDATE SET value = value + excluded.value", uid, key, n)
+
+    def stat(self, uid, key):
+        row = self.one("SELECT value FROM stats WHERE user_id=? AND key=?", uid, key)
+        return row["value"] if row else 0
+
+    def stats(self, uid):
+        return {r["key"]: r["value"] for r in self.q("SELECT key, value FROM stats WHERE user_id=?", uid)}
+
+    def meta(self, key, default=None):
+        row = self.one("SELECT value FROM meta WHERE key=?", key)
+        return row["value"] if row else default
+
+    def set_meta(self, key, value):
+        self.run("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, str(value))
+
+    def claim(self, kind, event, uid):
+        """Records a one-time claim. Returns False if this player already claimed it."""
+        cur = self.run("INSERT OR IGNORE INTO claims (kind, event, user_id, at) VALUES (?, ?, ?, ?)",
+                       kind, event, uid, time.time())
+        return cur.rowcount == 1
+
+    def claims(self, kind, event):
+        return [r["user_id"] for r in self.q("SELECT user_id FROM claims WHERE kind=? AND event=? ORDER BY at", kind, event)]
 
     def announce_channel(self, gid):
         row = self.one("SELECT announce_channel FROM guilds WHERE id=?", gid)

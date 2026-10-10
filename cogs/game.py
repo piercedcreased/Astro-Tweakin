@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from game import data, engine, images
+from game import data, engine, images, space
 from game.db import NotEnough
 from game.data import LAYERS, ORE_BY_KEY, PARTS, PART_BY_KEY, PICKAXE_BY_KEY, PLANETS, REALMS, TIERS, TIER_ORDER
 from game.engine import fmt_chance, fmt_time
@@ -81,7 +81,9 @@ class Game(commands.Cog):
         pick = PICKAXE_BY_KEY[user["pickaxe"]]
         layer = LAYERS[user["layer"] - 1]
         luck = engine.luck_for(self.db, user)
-        lines = [
+        title = space.title_of(user)
+        lines = [f"🏷️ *{title}*"] if title else []
+        lines += [
             f"💰 **{user['coins']:,}** coins",
             f"{layer.realm_info.emoji} {layer.realm_info.name}  ·  {layer.planet_info.emoji} **{layer.planet_info.name}**  ·  🕳️ {layer.name}",
             f"⛏️ {pick.name}",
@@ -89,9 +91,11 @@ class Game(commands.Cog):
         ]
         buffs = self.db.buffs(uid)
         if buffs:
-            names = {"luck": "🍀 Luck", "haste": "⚡ Haste", "rolls": "⛏️ Double Dig"}
+            names = {"luck": "🍀 Luck", "haste": "⚡ Haste", "rolls": "⛏️ Double Dig", "snack_luck": "🧃 Snack Luck",
+                     "nocops": "🧴 Cop Repellent"}
             lines.append("✨ " + "  ·  ".join(
-                f"{names[k]} x{a:g} ({fmt_time(e - time.time())})" for k, (a, e) in buffs.items()))
+                f"{names.get(k, k)}{'' if k == 'nocops' else f' x{a:g}'} ({fmt_time(e - time.time())})"
+                for k, (a, e) in buffs.items()))
         ev = self.db.event()
         if ev:
             lines.append(f"🎉 Server event: **{ev['label']}** x{ev['luck']:g} luck ({fmt_time(ev['expires'] - time.time())})")
@@ -119,6 +123,10 @@ class Game(commands.Cog):
         on = bool(user["autosell"])
         v.add_item(B("autosell", uid, f"Auto-sell: {'ON' if on else 'OFF'}", "♻️",
                      discord.ButtonStyle.success if on else discord.ButtonStyle.secondary, row=1))
+        v.add_item(B("ship", uid, "Ship", "🚀", row=2))
+        v.add_item(B("bounties", uid, "Bounties", "📜", row=2))
+        v.add_item(B("snacks", uid, "Snacks", "🍬", row=2))
+        v.add_item(B("trophies", uid, "Achievements", "🏆", row=2))
         return v
 
     def main_panel(self, uid, headline=None, ores=None, note=None):
@@ -218,11 +226,14 @@ class Game(commands.Cog):
             elif kind == "bar":
                 by_tier["bars"].append((0, f"{data.BARS[key][0]} x{q:,}"))
                 worth += data.bar_value(key) * q
-            else:
+            elif kind == "snack":
+                s = data.SNACK_BY_KEY[key]
+                by_tier["snacks"].append((0, f"{s.emoji} {s.name} x{q:,}"))
+            elif kind == "part":
                 by_tier["parts"].append((0, f"{PART_BY_KEY[key].name} x{q:,}"))
-        for t in list(reversed(TIER_ORDER)) + ["bars", "parts"]:
+        for t in list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
             if by_tier.get(t):
-                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts"}.get(t) or f"{TIER_EMOJI[t]} {TIERS[t].name}"
+                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks"}.get(t) or f"{TIER_EMOJI[t]} {TIERS[t].name}"
                 val = ", ".join(s for _, s in sorted(by_tier[t], reverse=True))
                 e.add_field(name=name, value=val[:1024], inline=False)
         if not items:
@@ -238,12 +249,20 @@ class Game(commands.Cog):
 
     async def handle(self, interaction: discord.Interaction, action, uid):
         if interaction.user.id != uid:
-            await interaction.response.send_message("That's not your mine! Use `/mine` to open your own.", ephemeral=True)
+            await interaction.response.send_message("Those buttons belong to someone else. Use `/mine` to open your own.",
+                                                    ephemeral=True)
             return
         self.db.user(uid, interaction.user.display_name)
+        sp = self.bot.get_cog("Space")
+        if sp and sp.busy(uid) and not action.startswith("cc_"):
+            await interaction.response.send_message("🚔 The Space Authority is searching your ship! Deal with them first.",
+                                                    ephemeral=True)
+            return
         async with self.locks[uid]:
             try:
                 await self.dispatch_action(interaction, action, uid)
+                if sp:
+                    await sp.after_action(interaction, uid)
             except NotEnough:
                 await self.oops(interaction, "You don't have enough for that anymore. Nothing was taken.")
             except Exception:
@@ -267,6 +286,10 @@ class Game(commands.Cog):
         fn = getattr(self, "do_" + action, None)
         if fn:
             await fn(interaction, uid)
+            return
+        sp = self.bot.get_cog("Space")
+        if not (sp and await sp.dispatch(interaction, action, uid)):
+            await interaction.response.defer()
 
     async def show(self, interaction, panel):
         e, files, v = panel
@@ -283,6 +306,9 @@ class Game(commands.Cog):
         head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
         await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores))
         await self.celebrate(interaction, res.best)
+        sp = self.bot.get_cog("Space")
+        if sp:
+            await sp.maybe_check(interaction, uid)
 
     async def celebrate(self, interaction, ore):
         tier = ore.tier_info
@@ -391,6 +417,9 @@ class Game(commands.Cog):
         ok, msg = engine.unlock_next(self.db, uid)
         if ok:
             await self.show(interaction, self.main_panel(uid, headline=msg))
+            sp = self.bot.get_cog("Space")
+            if sp and engine.is_new_planet(LAYERS[self.db.user(uid)["layer"] - 1]):
+                await sp.maybe_check(interaction, uid, travel=True)
         else:
             await self.show(interaction, self.shop_panel(uid, note="❌ " + msg))
 
@@ -424,12 +453,19 @@ class Game(commands.Cog):
         user = self.db.user(member.id, member.display_name)
         found = self.db.discovered(member.id)
         e = discord.Embed(title=f"🐌 {member.display_name}", color=discord.Color.green())
+        if space.title_of(user):
+            e.description = f"🏷️ *{space.title_of(user)}*"
         e.add_field(name="Coins", value=f"{user['coins']:,}")
         e.add_field(name="Pickaxe", value=PICKAXE_BY_KEY[user["pickaxe"]].name)
         e.add_field(name="Deepest layer", value=LAYERS[user["max_layer"] - 1].name)
         e.add_field(name="Ores mined", value=f"{user['total_mined']:,}")
         e.add_field(name="Index", value=f"{len(found)}/{len(data.ORES)}")
         e.add_field(name="Rebirths", value=str(user["rebirths"]))
+        e.add_field(name="Ship", value=" · ".join(f"{u.emoji} {user['ship_' + u.key]}" for u in data.SHIP_UPGRADES))
+        e.add_field(name="Achievements", value=f"{len(space.unlocked(self.db, member.id))}/{len(data.ACHIEVEMENTS)}")
+        stats = self.db.stats(member.id)
+        e.add_field(name="Smuggling", value=f"🚔 {stats.get('checks_busted', 0)} busts · 😎 {stats.get('checks_survived', 0)} escapes\n"
+                                             f"🏴‍☠️ {stats.get('raids_won', 0)} raids · ⚔️ {stats.get('duels_won', 0)} duel wins", inline=False)
         files = []
         if user["best_ore"]:
             best = ORE_BY_KEY[user["best_ore"]]
@@ -578,6 +614,12 @@ class Game(commands.Cog):
             "♻️ **Auto-sell** sells common and uncommon ores as you mine.\n"
             "📅 **/daily** gives coins. Keep the streak going for bigger rewards.\n"
             "🔥 **/rebirth** burns the lab down for permanent boosts.\n\n"
+            "🚔 Carry Legendary+ ore or contraband and the **Space Authority** may pull you over. Hide it, talk, "
+            "distract the K-9, bribe or dump it.\n"
+            "🚀 **/ship** upgrades your ship · 🏴‍☠️ **/raid** someone's ship for stuff they forgot (they lose nothing) · "
+            "⚔️ **/duel** for coins\n"
+            "🍬 **/snacks** for boosts · 📜 **/bounties** daily jobs · 🏆 **/achievements** and **/title**\n"
+            "☄️ A **meteor** hits once a day and 👽 **Tweaker Tim** drops by a few times a day in the announce channel.\n\n"
             "Every planet hides one ultra-rare piece of 🚨 **contraband**. Legendary and rarer finds "
             "get a special animation and get announced to the server.\n"
             "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**"))

@@ -564,3 +564,273 @@ def shop_banner(coins, goals, pick=None):
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=88)
     return buf.getvalue()
+
+
+# ================================================================ v0.3.0: ships, cops, meteors, duels, Tim
+
+def _space_bg(W, H, seed, top=(10, 8, 22), bottom=(24, 14, 40), stars=70):
+    img = Image.new("RGB", (W, H), top)
+    d = ImageDraw.Draw(img)
+    for y in range(H):
+        d.line([(0, y), (W, y)], fill=_mix(top, bottom, y / H))
+    r = random.Random(seed)
+    for _ in range(stars):
+        x, y, b = r.uniform(0, W), r.uniform(0, H), r.randint(120, 255)
+        s = r.choice([1, 1, 1, 2])
+        d.ellipse([x - s / 2, y - s / 2, x + s / 2, y + s / 2], fill=(b, b, min(255, b + 20)))
+    return img
+
+
+def _draw_ship(layer, cx, cy, s, paint, hull=0, engine=0, stash=0, flame=0.0, police=False, siren_phase=0):
+    """Side-view rocket facing right, drawn onto an RGBA layer. s = scale (1.0 is about 300px long)."""
+    d = ImageDraw.Draw(layer)
+    P = lambda x, y: (cx + x * s, cy + y * s)
+    dark, light = _dark(paint, 0.4), _light(paint, 0.35)
+    # engine flame (longer with a better engine)
+    if flame >= 0:
+        length = (40 + 18 * engine) * (0.85 + 0.3 * flame)
+        for k, col in enumerate([(255, 90, 20), (255, 170, 40), (255, 245, 180)]):
+            w = 26 - k * 8
+            d.polygon([P(-150, -w), P(-150 - length * (1 - k * 0.25), 0), P(-150, w)], fill=col)
+    # fins
+    d.polygon([P(-120, -40), P(-160, -85), P(-80, -40)], fill=dark)
+    d.polygon([P(-120, 40), P(-160, 85), P(-80, 40)], fill=dark)
+    # nozzle
+    d.rectangle([P(-160, -26), P(-140, 26)], fill=(70, 70, 80))
+    # body + nose
+    d.rounded_rectangle([P(-145, -45), P(95, 45)], radius=int(40 * s), fill=paint)
+    d.polygon([P(80, -45), P(165, 0), P(80, 45)], fill=paint)
+    d.polygon([P(80, 10), P(165, 0), P(80, 45)], fill=dark)
+    d.rounded_rectangle([P(-145, 15), P(95, 45)], radius=int(25 * s), fill=dark)
+    d.line([P(-120, -30), P(70, -30)], fill=light, width=max(2, int(5 * s)))
+    # reinforced hull plates
+    for i in range(hull):
+        x = -110 + i * 38
+        d.rectangle([P(x, -40), P(x + 30, 40)], outline=(200, 200, 215), width=max(1, int(3 * s)))
+        for yy in (-34, 34):
+            d.ellipse([P(x + 3, yy - 3), P(x + 9, yy + 3)], fill=(220, 220, 230))
+    # hidden compartments (dashed hatches under the hull)
+    for i in range(stash):
+        x = -100 + i * 36
+        for k in range(4):
+            d.line([P(x + k * 7, 30), P(x + k * 7 + 4, 30)], fill=(30, 30, 30), width=max(1, int(2 * s)))
+            d.line([P(x + k * 7, 42), P(x + k * 7 + 4, 42)], fill=(30, 30, 30), width=max(1, int(2 * s)))
+    # window
+    d.ellipse([P(35, -28), P(75, 12)], fill=(30, 40, 60), outline=(220, 220, 235), width=max(2, int(5 * s)))
+    d.ellipse([P(43, -22), P(55, -10)], fill=(170, 230, 255))
+    if police:
+        for k, col in enumerate([(255, 40, 40), (40, 90, 255)]):
+            on = (siren_phase + k) % 2 == 0
+            c = col if on else _dark(col, 0.65)
+            d.rounded_rectangle([P(-40 + k * 40, -66), P(-5 + k * 40, -45)], radius=int(6 * s), fill=c)
+            if on:
+                d.ellipse([P(-60 + k * 40, -95), P(15 + k * 40, -20)], outline=col + (120,) if layer.mode == "RGBA" else col, width=2)
+
+
+def _ship_png(name, paint, hull, engine, stash, stamp=None, stamp_color=(255, 60, 60)):
+    W, H = 480, 260
+    img = _space_bg(W, H, name).convert("RGBA")
+    layer = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+    _draw_ship(layer, W * 1.05, H * 1.1, 1.75, paint, hull, engine, stash, flame=0.5)
+    layer = layer.resize((W, H), Image.LANCZOS)
+    img.alpha_composite(layer)
+    d = ImageDraw.Draw(img)
+    _outlined(d, (W / 2, 24), f"{name.upper()}'S SHIP", _fit(f"{name.upper()}'S SHIP", W - 20, 28), _light(paint, 0.3))
+    if stamp:
+        st = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(st)
+        size = _fit(stamp, W - 80, 64)
+        sd.text((W / 2, H / 2 + 10), stamp, font=font(size), fill=stamp_color + (235,), anchor="mm",
+                stroke_width=5, stroke_fill=(0, 0, 0, 255))
+        st = st.rotate(12, resample=Image.BICUBIC)
+        img.alpha_composite(st)
+    return _png(img.convert("RGB"))
+
+
+def ship_image(name, user, stamp=None, stamp_color=(255, 60, 60)):
+    from .data import PAINTS
+    paint = PAINTS[user["ship_paint"] % len(PAINTS)][1]
+    return _ship_png(name, paint, user["ship_hull"], user["ship_engine"], user["ship_stash"], stamp, stamp_color)
+
+
+def police_gif(top, bottom):
+    """Space Authority cruiser with its lights going. top/bottom are the caption lines."""
+    W, H, N = 480, 270, 12
+    bg = _space_bg(W, H, "cops")
+    out = []
+    for f in range(N):
+        phase = (f // 3) % 2
+        img = bg.copy().convert("RGBA")
+        tint = Image.new("RGBA", (W, H), ((255, 30, 30, 45) if phase else (30, 70, 255, 45)))
+        img.alpha_composite(tint)
+        layer = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+        bob = 6 * math.sin(2 * math.pi * f / N)
+        _draw_ship(layer, W * 0.95, H * 1.08 + bob, 1.6, (235, 238, 245), hull=2, flame=0.3 + 0.4 * (f % 2), police=True,
+                   siren_phase=phase)
+        layer = layer.resize((W, H), Image.LANCZOS)
+        img.alpha_composite(layer)
+        d = ImageDraw.Draw(img)
+        d.text((W * 0.47, H * 0.56), "SPACE COPS", font=font(16), fill=(30, 50, 140), anchor="mm")
+        tcol = (255, 70, 70) if phase else (110, 160, 255)
+        _outlined(d, (W / 2, 28), top, _fit(top, W - 30, 36), tcol)
+        _outlined(d, (W / 2, H - 24), bottom, _fit(bottom, W - 30, 24), (255, 255, 255), stroke=3)
+        out.append(img.convert("RGB"))
+    buf = io.BytesIO()
+    out[0].save(buf, "GIF", save_all=True, append_images=out[1:], duration=90, loop=0, optimize=True)
+    return buf.getvalue()
+
+
+def meteor_gif():
+    """A meteor screams in, slams into the ground and sits there glowing."""
+    W, H = 480, 270
+    bg = _space_bg(W, H, "meteor", top=(14, 8, 30), bottom=(60, 25, 40))
+    g = ImageDraw.Draw(bg)
+    g.polygon([(0, H), (0, H - 50), (90, H - 62), (200, H - 48), (320, H - 66), (W, H - 52), (W, H)], fill=(55, 40, 50))
+    gx, gy = W * 0.5, H - 58
+    sx, sy = W + 60, -60
+    out, durs = [], []
+    r = random.Random(7)
+    sparks = [(r.uniform(-math.pi, 0), r.uniform(40, 120), r.random()) for _ in range(26)]
+    FALL, GLOW = 12, 14
+    for f in range(FALL + GLOW):
+        img = bg.copy().convert("RGBA")
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        if f < FALL:
+            t = (f + 1) / FALL
+            x, y = sx + (gx - sx) * t, sy + (gy - sy) * t
+            for k in range(14):
+                tt = max(0, t - k * 0.025)
+                tx, ty = sx + (gx - sx) * tt, sy + (gy - sy) * tt
+                rr = 18 - k
+                d.ellipse([tx - rr, ty - rr, tx + rr, ty + rr], fill=(255, 140 + k * 7, 40, 200 - k * 13))
+            d.ellipse([x - 20, y - 20, x + 20, y + 20], fill=(110, 70, 60, 255))
+            d.ellipse([x - 12, y - 14, x + 4, y - 2], fill=(160, 110, 90, 255))
+        else:
+            p = (f - FALL) / GLOW
+            if f - FALL < 3:
+                fl = 1 - (f - FALL) / 3
+                d.ellipse([gx - 220 * (1 - fl * 0.3), gy - 150, gx + 220 * (1 - fl * 0.3), gy + 150],
+                          fill=(255, 230, 160, int(200 * fl)))
+            pulse = 0.5 + 0.5 * math.sin(2 * math.pi * p * 2)
+            d.ellipse([gx - 70 - 10 * pulse, gy - 30, gx + 70 + 10 * pulse, gy + 26], fill=(255, 120, 30, 90))
+            d.ellipse([gx - 60, gy - 14, gx + 60, gy + 16], fill=(35, 25, 30, 255))
+            d.ellipse([gx - 26, gy - 34, gx + 26, gy + 10], fill=(110, 70, 60, 255))
+            for k, (a, dist, o) in enumerate(sparks):
+                q = (p + o) % 1
+                x2, y2 = gx + math.cos(a) * dist * q, gy - 10 + math.sin(a) * dist * q
+                s = 3 * (1 - q) + 1
+                d.ellipse([x2 - s, y2 - s, x2 + s, y2 + s], fill=(255, 200 + int(55 * (1 - q)), 80, 255))
+        layer = layer.filter(ImageFilter.GaussianBlur(1))
+        img.alpha_composite(layer)
+        dd = ImageDraw.Draw(img)
+        _outlined(dd, (W / 2, 30), "METEOR STRIKE!", 38, (255, 170, 50))
+        if f >= FALL:
+            _outlined(dd, (W / 2, H - 20), "QUICK, MINE IT!", 22, (255, 255, 255), stroke=3)
+        out.append(img.convert("RGB"))
+        durs.append(55 if f < FALL else 110)
+    buf = io.BytesIO()
+    out[0].save(buf, "GIF", save_all=True, append_images=out[1:], duration=durs, loop=0, optimize=True)
+    return buf.getvalue()
+
+
+def duel_gif(name_a, name_b, paint_a, paint_b, rounds, winner):
+    """Two ships trade laser fire round by round, then the loser blows up. Plays once."""
+    W, H = 480, 270
+    bg = _space_bg(W, H, name_a + name_b)
+
+    def ships(hide=None, boom=0.0):
+        layer = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+        left = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+        if hide != 0:
+            _draw_ship(left, W * 0.42, H * 1.1, 0.95, paint_a, flame=0.5)
+        layer.alpha_composite(left)
+        right = Image.new("RGBA", (W * 2, H * 2), (0, 0, 0, 0))
+        if hide != 1:
+            _draw_ship(right, W * 0.42, H * 1.1, 0.95, paint_b, flame=0.5)
+        layer.alpha_composite(right.transpose(Image.FLIP_LEFT_RIGHT))
+        return layer.resize((W, H), Image.LANCZOS)
+
+    base = ships()
+    xa, xb, y = W * 0.36, W * 0.64, H * 0.55
+    frames, durs = [], []
+
+    def frame(layer_fx=None, caption=None, hide=None, dur=80, boom_at=None, boom=0.0):
+        img = bg.copy().convert("RGBA")
+        img.alpha_composite(base if hide is None else ships(hide))
+        if layer_fx:
+            img.alpha_composite(layer_fx)
+        d = ImageDraw.Draw(img)
+        if boom_at is not None:
+            bx = boom_at
+            for k, col in enumerate([(255, 80, 20), (255, 170, 40), (255, 240, 180)]):
+                rr = (70 - k * 20) * boom
+                d.ellipse([bx - rr, y - rr, bx + rr, y + rr], fill=col)
+        _outlined(d, (16, 22), name_a.upper(), _fit(name_a.upper(), W / 2 - 30, 22), _light(paint_a, 0.3), anchor="lm", stroke=3)
+        _outlined(d, (W - 16, 22), name_b.upper(), _fit(name_b.upper(), W / 2 - 30, 22), _light(paint_b, 0.3), anchor="rm", stroke=3)
+        _outlined(d, (W / 2, 22), "VS", 22, (255, 220, 80), stroke=3)
+        if caption:
+            _outlined(d, (W / 2, H - 22), caption, _fit(caption, W - 20, 26), (255, 255, 255), stroke=3)
+        frames.append(img.convert("RGB"))
+        durs.append(dur)
+
+    frame(caption="DUEL!", dur=600)
+    score = [0, 0]
+    for i, (ra, rb) in enumerate(rounds):
+        shooter = 0 if ra > rb else 1
+        score[shooter] += 1
+        x0, x1 = (xa + 40, xb - 40) if shooter == 0 else (xb - 40, xa + 40)
+        col = (90, 255, 120) if shooter == 0 else (255, 90, 200)
+        for k in range(6):
+            fx = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            d = ImageDraw.Draw(fx)
+            t = (k + 1) / 6
+            head = x0 + (x1 - x0) * t
+            tail = x0 + (x1 - x0) * max(0, t - 0.35)
+            d.line([(tail, y), (head, y)], fill=col + (255,), width=6)
+            d.line([(tail, y), (head, y)], fill=(255, 255, 255, 255), width=2)
+            if k == 5:
+                d.ellipse([x1 - 18, y - 18, x1 + 18, y + 18], fill=(255, 220, 120, 230))
+            frame(fx, caption=f"ROUND {i + 1}:  {ra} vs {rb}", dur=60)
+        frame(caption=f"ROUND {i + 1}:  {ra} vs {rb}   ({score[0]}-{score[1]})", dur=500)
+    lose_x = xb if winner == 0 else xa
+    for k in range(6):
+        frame(caption="KABOOM!", boom_at=lose_x, boom=(k + 1) / 6, dur=70, hide=1 - winner if k >= 3 else None)
+    win_name = (name_a if winner == 0 else name_b).upper()
+    frame(caption=f"{win_name} WINS!", hide=1 - winner, dur=5000)
+    buf = io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=durs, optimize=True)
+    return buf.getvalue()
+
+
+TIM_PIC = os.path.join(ROOT, "assets", "tim.png")   # swap this file to change Tweaker Tim's face
+
+
+def tim_card(leaving=False):
+    W, H = 480, 280
+    img = Image.new("RGB", (W, H), (20, 10, 30))
+    d = ImageDraw.Draw(img)
+    for y in range(H):
+        d.line([(0, y), (W, y)], fill=_mix((40, 10, 60), (10, 60, 40), y / H))
+    if os.path.exists(TIM_PIC):
+        pic = Image.open(TIM_PIC).convert("RGB")
+        side = min(pic.size)
+        pic = pic.crop(((pic.width - side) // 2, (pic.height - side) // 2,
+                        (pic.width + side) // 2, (pic.height + side) // 2)).resize((230, 230), Image.LANCZOS)
+        mask = Image.new("L", (230, 230), 0)
+        ImageDraw.Draw(mask).rounded_rectangle([0, 0, 229, 229], radius=30, fill=255)
+        if leaving:
+            pic = pic.convert("L").convert("RGB")
+        img.paste(pic, (20, 25), mask)
+        d.rounded_rectangle([18, 23, 252, 257], radius=32, outline=(120, 255, 140), width=4)
+    tx = 368
+    _outlined(d, (tx, 70), "TWEAKER", _fit("TWEAKER", W - 270, 40), (120, 255, 140))
+    _outlined(d, (tx, 115), "TIM", 52, (120, 255, 140))
+    line = "HAS LEFT" if leaving else "IS IN TOWN"
+    _outlined(d, (tx, 170), line, 26, (255, 220, 80) if not leaving else (180, 180, 180), stroke=3)
+    if not leaving:
+        _outlined(d, (tx, 205), "10 MINUTES ONLY", 18, (255, 255, 255), stroke=2)
+        _outlined(d, (tx, 232), "NO REFUNDS", 16, (255, 120, 120), stroke=2)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    return buf.getvalue()

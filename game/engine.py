@@ -57,9 +57,11 @@ def luck_for(db, user, base=1.0):
     parts = [(pick.name, pick.luck * base), (layer.name, layer.luck)]
     if user["rebirths"]:
         parts.append((f"Rebirth x{user['rebirths']}", 1 + data.REBIRTH_LUCK * user["rebirths"]))
-    buff = db.buffs(user["id"]).get("luck")
-    if buff:
-        parts.append(("Lucky Roll", buff[0]))
+    buffs = db.buffs(user["id"])
+    if buffs.get("luck"):
+        parts.append(("Lucky Roll", buffs["luck"][0]))
+    if buffs.get("snack_luck"):
+        parts.append(("Space Snack", buffs["snack_luck"][0]))
     ev = db.event()
     if ev:
         parts.append((ev["label"] or "Server Event", ev["luck"]))
@@ -112,6 +114,8 @@ def record_finds(db, uid, ores):
     if prev is None or best.chance > prev.chance:
         fields["best_ore"] = best.key
     db.set(uid, **fields)
+    rare = data.TIER_ORDER.index("rare")
+    db.bump(uid, "found_rare", sum(1 for o in ores if data.TIER_ORDER.index(o.tier) >= rare))
     for o in ores:
         if o.chance >= 10_000:
             db.run("INSERT INTO finds (user_id, ore, at) VALUES (?, ?, ?)", uid, o.key, time.time())
@@ -124,6 +128,7 @@ def swing(db, uid):
     luck = luck_for(db, user)
     ores = [roll_ore(user["layer"], luck.total) for _ in range(rolls_for(db, user))]
     best = record_finds(db, uid, ores)
+    db.bump(uid, "mined", len(ores))
     coins = autosell(db, uid)
     return SwingResult(ores, best, luck, coins)
 
@@ -232,6 +237,7 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
         sold += n
     total = int(total * mult)
     db.run("UPDATE users SET coins = coins + ?, total_earned = total_earned + ? WHERE id=?", total, total, uid)
+    db.bump(uid, "sold_coins", total)
     return sold, total
 
 
@@ -261,6 +267,8 @@ def item_name(item):
         return ORE_BY_KEY[key].name
     if kind == "part":
         return PART_BY_KEY[key].name
+    if kind == "snack":
+        return data.SNACK_BY_KEY[key].name
     return data.BARS[key][0]
 
 
@@ -386,6 +394,7 @@ def smelt_all(db, uid):
         fee += n * cost
         made[name] = n
     db.add_coins(uid, -fee)
+    db.bump(uid, "smelted", sum(made.values()))
     return made, fee
 
 
@@ -418,6 +427,7 @@ def collect_sluglings(db, uid):
     luck = luck_for(db, user, base=data.SLUGLING_LUCK).total
     ores = [roll_ore(user["layer"], luck) for _ in range(n)]
     record_finds(db, uid, ores)
+    db.bump(uid, "collected")
     return ores, elapsed
 
 
@@ -433,6 +443,7 @@ def pick_prize():
 def apply_prize(db, uid, prize):
     user = db.user(uid)
     db.set(uid, last_roll=time.time())
+    db.bump(uid, "lucky_rolls")
     if prize.kind == "coins":
         amount = int(150 * (3 ** (user["max_layer"] - 1)) * (1 + 0.5 * user["sluglings"] ** 0.5) * rng.uniform(0.7, 1.6))
         db.add_coins(uid, amount)

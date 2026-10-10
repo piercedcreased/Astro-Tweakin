@@ -27,7 +27,24 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | `/rebirth` | "Burn the lab down" at Slug Core with 50M coins: reset for +50% luck and +25% sell value forever. |
 
 Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/leaderboard`, `/help`.
-Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`.
+
+**Smuggler's Run (v0.3.0)**
+
+| | |
+|---|---|
+| 🚔 Cargo checks | Carry Legendary+ ore (especially contraband) and the Space Authority may pull you over. Hide it, smooth talk, distract the K-9, bribe, or dump it. Busted = fine + your cheapest hot ore seized. |
+| 🚀 `/ship` | Hidden Compartments (fewer checks), Reinforced Hull (raid defense), Turbo Engine (raids and duels), paint. |
+| 🏴‍☠️ `/raid @player` | Luck check for stuff they "forgot" on their ship. The target never loses anything. |
+| ⚔️ `/duel @player [bet]` | Best-of-3 laser duel, optional coin bet both players agree to. |
+| 🍬 `/snacks` | Cook boosts from coins + your layer's base ore. |
+| 📜 `/bounties` | Three daily jobs. |
+| 🏆 `/achievements`, `/title` | Every achievement is a title you can wear. |
+| ☄️ Meteor | Hits the announce channel once a day at a random time (sometimes more). First 5 to mine it get loot. |
+| 👽 Tweaker Tim | Shady trader who shows up about 3 times a day for 10 minutes. His picture is `assets/tim.png`. |
+
+Meteors and Tim post in the channel set with `/admin announce` (or `ANNOUNCE_CHANNEL_ID`). Without one they don't appear.
+
+Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`, `/admin meteor`, `/admin tim`, `/admin cops` (sends a cargo check at yourself to test it).
 
 ## Running it on your PC
 

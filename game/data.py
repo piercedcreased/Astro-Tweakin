@@ -355,3 +355,200 @@ REBIRTH_SELL = 0.25       # +25% sell value per rebirth
 DAILY_COOLDOWN = 20 * 3600
 DAILY_GRACE = 48 * 3600
 AUTOSELL_MAX_TIER = "uncommon"   # auto-sell only sells common and uncommon ores
+
+
+# ================================================================ v0.3.0 Smuggler's Run
+
+def scale(layer):
+    """Coin prices that grow with how far you've gotten (x3 per layer), so new stuff stays relevant."""
+    return 3 ** (layer - 1)
+
+
+# ---- Space Authority cargo checks
+# "Hot cargo" is any Legendary-or-rarer ore. Contraband makes the cops way more interested.
+HOT_TIER = "legendary"
+CHECK_CHANCE_CONTRABAND = 1 / 500     # per swing while you carry contraband
+CHECK_CHANCE_HOT = 1 / 2000           # per swing while you carry other hot cargo
+CHECK_CHANCE_TRAVEL = 0.25            # launching to a new planet with contraband aboard
+CHECK_COOLDOWN = 15 * 60              # at least this long between two checks on the same player
+CHECK_STEP_SECONDS = 25               # time to pick an option before the cops lose patience
+FINE_CONTRABAND = 0.10                # share of your coins fined when busted
+FINE_HOT = 0.05
+BRIBE_SHARE = 0.08                    # bribe costs this share of your coins (at least BRIBE_MIN)
+BRIBE_MIN = 1_000
+BRIBE_SUCCESS = 0.75
+TALK_RIGHT = 0.85                     # smooth talk with the excuse that matches the officer's mood
+TALK_WRONG = 0.25
+
+STASH_SPOTS = [
+    "Under the driver's seat", "Inside the fuel tank", "In a hollowed-out moon cheese",
+    "Taped under the toilet", "In the glovebox (bold)", "Inside a slug plushie",
+    "In the spare spacesuit", "Behind a poster of the Slug King", "In your own sock",
+    "In the cereal box", "Inside the nav computer", "Under the floor mat",
+]
+
+# (mood, hint shown to the player, excuse that works)
+OFFICER_MOODS = [
+    ("Hungry", "keeps staring at your snacks and his stomach is growling", "Want half my sandwich, officer?"),
+    ("Bored", "is yawning and checking the clock", "I'm just a boring space accountant."),
+    ("Grumpy", "is red in the face and muttering about paperwork", "I'll fill out every form twice, sir!"),
+    ("Sleepy", "can barely keep his eyes open", "It's late, you should go home and rest."),
+    ("Starstruck", "keeps asking if you're famous", "I'm a celebrity. Want an autograph?"),
+]
+OFFICER_NAMES = ["Officer Glorp", "Sergeant Zorb", "Deputy Flarn", "Inspector Blip", "Captain Krunk"]
+
+# (emoji, riddle) for distracting Sniffles the K-9 Slug
+SNIFFLES_TREATS = [
+    ("🍩", "something round with a hole in the middle"),
+    ("🍕", "a triangle with cheese on it"),
+    ("🌭", "a sausage in a bun"),
+    ("🍪", "a crunchy circle with chocolate chips"),
+    ("🧀", "the stuff the Moon is made of"),
+    ("🥓", "crispy strips from a pig"),
+    ("🍌", "a long yellow fruit"),
+    ("🦴", "the classic, a bone"),
+]
+
+# ---- Spaceship upgrades
+@dataclass(frozen=True)
+class ShipUpgrade:
+    key: str
+    name: str
+    emoji: str
+    max_level: int
+    base: int             # coins at level 1, before layer scaling
+    bar: str              # bar type used, needs (level) * 10 of them
+    blurb: str
+
+
+SHIP_UPGRADES = [
+    ShipUpgrade("stash", "Hidden Compartments", "🗄️", 5, 3_000, "iron",
+                "-15% cargo check chance per level, and the cops sometimes miss your stash spot."),
+    ShipUpgrade("hull", "Reinforced Hull", "🛡️", 5, 4_000, "silver",
+                "Raiders have a lower chance of finding anything on your ship."),
+    ShipUpgrade("engine", "Turbo Engine", "🔥", 5, 5_000, "gold",
+                "Better raids and more firepower in duels."),
+]
+SHIP_BY_KEY = {u.key: u for u in SHIP_UPGRADES}
+STASH_CHECK_CUT = 0.15        # per Hidden Compartments level
+STASH_MISS = 0.10             # per level: chance the inspector misses your spot even if he looks there
+PAINT_COST = 1_000            # x layer scale
+PAINTS = [
+    ("Slug Green", (110, 220, 90)), ("Cop Car Blue", (60, 110, 230)), ("Hot Pink", (255, 90, 190)),
+    ("Rust Bucket", (170, 90, 50)), ("Void Black", (40, 35, 55)), ("Gold Chain", (240, 200, 60)),
+    ("Grandma White", (235, 235, 240)), ("Candy Red", (230, 40, 60)),
+]
+
+# ---- Raids and duels
+RAID_COOLDOWN = 20 * 60
+RAID_PROTECT = 2 * 3600       # the same ship can't be raided by the same player again for this long
+RAID_BASE = 0.50
+RAID_ENGINE = 0.04
+RAID_HULL = 0.08
+RAID_MIN, RAID_MAX = 0.10, 0.85
+RAID_LOOT = (3, 6)            # ores found when a raid works
+RAID_LUCK = 3.0               # bonus luck on raid loot rolls
+DUEL_TIMEOUT = 120
+DUEL_COOLDOWN = 60
+
+# ---- Space Snacks (crafted from coins + your current layer's base ore, eaten for buffs)
+@dataclass(frozen=True)
+class Snack:
+    key: str
+    name: str
+    emoji: str
+    buff: str             # buff kind
+    amount: float
+    minutes: int
+    coins: int            # x layer scale
+    ore_qty: int          # how many of your current layer's base ore
+    blurb: str
+
+
+SNACKS = [
+    Snack("luck_juice", "Luck Juice", "🧃", "snack_luck", 2, 15, 3_000, 40, "x2 luck for 15 minutes. Tastes like pennies."),
+    Snack("haste_gummies", "Haste Gummies", "🍬", "haste", 0.6, 15, 2_500, 30, "-40% mining cooldown for 15 minutes."),
+    Snack("double_dip", "Double Dip Chips", "🥔", "rolls", 2, 10, 4_000, 50, "x2 ores per swing for 10 minutes."),
+    Snack("cop_repellent", "Cop Repellent", "🧴", "nocops", 1, 120, 5_000, 60, "No cargo checks for 2 hours. Smells like donuts."),
+    Snack("mega_munchies", "Mega Munchies", "🍔", "snack_luck", 5, 5, 12_000, 120, "x5 luck for 5 minutes. You will not stop eating."),
+]
+SNACK_BY_KEY = {s.key: s for s in SNACKS}
+
+# ---- Bounty board: 3 jobs a day (UTC). stat = which counter has to go up, need = by how much.
+@dataclass(frozen=True)
+class BountyKind:
+    key: str
+    stat: str
+    text: str             # "{n}" gets the amount
+    need: tuple           # (low, high) before scaling
+    scale_by: str         # "", "rolls" (pickaxe ores per swing) or "layer" (coin scale)
+    reward: int           # x layer scale
+
+
+BOUNTY_KINDS = [
+    BountyKind("mine", "mined", "Mine {n} ores", (150, 300), "rolls", 1_500),
+    BountyKind("rare", "found_rare", "Find {n} Rare-or-better ores", (2, 5), "", 2_500),
+    BountyKind("sell", "sold_coins", "Make {n} coins selling ore", (2_000, 5_000), "layer", 2_000),
+    BountyKind("roll", "lucky_rolls", "Use {n} Lucky Rolls", (2, 4), "", 2_000),
+    BountyKind("smelt", "smelted", "Smelt {n} bars", (5, 15), "", 1_500),
+    BountyKind("raid", "raids", "Raid {n} ship(s)", (1, 2), "", 3_000),
+    BountyKind("snack", "snacks_eaten", "Eat {n} Space Snack(s)", (1, 2), "", 2_000),
+    BountyKind("cook", "snacks_made", "Make {n} Space Snack(s)", (1, 3), "", 1_500),
+    BountyKind("collect", "collected", "Collect from your sluglings {n} time(s)", (1, 3), "", 1_000),
+]
+BOUNTY_BY_KEY = {b.key: b for b in BOUNTY_KINDS}
+BOUNTIES_PER_DAY = 3
+
+# ---- Meteor strikes and Tweaker Tim
+METEOR_CLAIMS = 5             # how many players can mine each meteor
+METEOR_ROLLS = 8
+METEOR_LUCK = 10.0
+METEOR_MINUTES = 10
+METEOR_SHOWER = (2.0, 15)     # server-wide luck boost when one hits: (x luck, minutes)
+METEOR_BONUS_PER_MINUTE = 1 / 4000   # rare extra meteors on top of the guaranteed daily one
+TIM_MINUTES = 10
+TIM_GAP_HOURS = (5, 11)       # time between Tim's visits (about 3 a day)
+TIM_WEIRD_ROCK_CHANCE = 0.005
+TIM_FENCE_MULT = 1.5
+
+# ---- Achievements. Every achievement unlocks its name as a title you can wear with /title.
+@dataclass(frozen=True)
+class Achievement:
+    key: str
+    name: str
+    emoji: str
+    desc: str
+
+
+ACHIEVEMENTS = [
+    Achievement("first_ore", "Rookie Tweaker", "⛏️", "Mine your first ore"),
+    Achievement("mined_1k", "Rock Muncher", "🪨", "Mine 1,000 ores"),
+    Achievement("mined_100k", "Professional Tweaker", "💼", "Mine 100,000 ores"),
+    Achievement("mined_1m", "Has Not Slept", "😵", "Mine 1,000,000 ores"),
+    Achievement("moon", "Moon Walker", "🌕", "Reach the Moon"),
+    Achievement("mars", "Red Planet Regular", "🔴", "Reach Mars"),
+    Achievement("trippy", "Interdimensional", "🍄", "Warp into the Trippy Dimension"),
+    Achievement("candy", "Sugar Rush", "🍭", "Reach the Candy Nebula"),
+    Achievement("void", "Void Gazer", "⚫", "Warp into the Void Realm"),
+    Achievement("nothing", "Seen Nothing", "⬛", "Reach The Nothing"),
+    Achievement("legendary", "Lucky Slug", "🟡", "Find a Legendary ore"),
+    Achievement("mythic", "Mythbuster", "🔴", "Find a Mythic ore"),
+    Achievement("celestial", "Starchild", "💠", "Find a Celestial ore"),
+    Achievement("divine", "The Chosen One", "🌟", "Find a Divine ore"),
+    Achievement("contraband", "Known to Police", "🚨", "Find any contraband"),
+    Achievement("kingpin", "Kingpin", "👑", "Find every piece of contraband in the universe"),
+    Achievement("smooth", "Smooth Criminal", "🕶️", "Get through 5 cargo checks clean"),
+    Achievement("busted", "Space Felon", "🚔", "Get busted by the Space Authority"),
+    Achievement("pirate", "Space Pirate", "🏴‍☠️", "Pull off 10 successful raids"),
+    Achievement("topgun", "Top Gun", "✈️", "Win 10 duels"),
+    Achievement("meteors", "Rock Chaser", "☄️", "Mine 5 meteors"),
+    Achievement("tim", "Tim's Best Customer", "👽", "Make 5 deals with Tweaker Tim"),
+    Achievement("munchies", "Munchie Monster", "🍔", "Eat 20 Space Snacks"),
+    Achievement("bounty", "Bounty Hunter", "📜", "Finish 15 bounties"),
+    Achievement("rebirth", "Arsonist", "🔥", "Burn the lab down (rebirth)"),
+    Achievement("pimped", "Pimp My Rocket", "🚀", "Max out every ship upgrade"),
+    Achievement("million", "Millionaire", "💰", "Hold 1,000,000 coins"),
+    Achievement("billion", "Billionaire", "💎", "Hold 1,000,000,000 coins"),
+    Achievement("trillion", "Space Oligarch", "🛸", "Hold 1,000,000,000,000 coins"),
+]
+ACH_BY_KEY = {a.key: a for a in ACHIEVEMENTS}

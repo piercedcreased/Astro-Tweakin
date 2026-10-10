@@ -39,6 +39,7 @@ class AstroTweakin(commands.Bot):
         self.auto_backup.change_interval(minutes=float(os.getenv("BACKUP_EVERY_MINUTES") or 30))
         self.auto_backup.start()
         await self.load_extension("cogs.game")
+        await self.load_extension("cogs.space")
         await self.load_extension("cogs.admin")
         if self.guild_id:
             # syncing to one server makes new commands show up instantly

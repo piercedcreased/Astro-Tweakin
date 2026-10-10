@@ -65,6 +65,32 @@ class Admin(commands.Cog):
         await interaction.response.send_message("🔄 Restarting. Back in about 10 seconds.", ephemeral=True)
         await self.bot.close()   # start.bat brings it straight back up
 
+    @group.command(name="meteor", description="Drop a meteor strike in the announce channel right now")
+    @admin_only
+    async def meteor(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        n = await self.bot.get_cog("Space").drop_meteor()
+        await interaction.followup.send(f"☄️ Meteor dropped in {n} channel(s)." if n else
+                                        "No announce channel set. Use `/admin announce` first.", ephemeral=True)
+
+    @group.command(name="tim", description="Make Tweaker Tim show up in the announce channel right now")
+    @admin_only
+    async def tim(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        n = await self.bot.get_cog("Space").tim_arrives()
+        await interaction.followup.send(f"👽 Tim showed up in {n} channel(s)." if n else
+                                        "No announce channel set. Use `/admin announce` first.", ephemeral=True)
+
+    @group.command(name="cops", description="Send the Space Authority after yourself to test a cargo check")
+    @admin_only
+    async def cops(self, interaction: discord.Interaction):
+        sp = self.bot.get_cog("Space")
+        if sp.busy(interaction.user.id):
+            await interaction.response.send_message("You're already being searched.", ephemeral=True)
+            return
+        await interaction.response.send_message("🚔 Calling the cops on you...", ephemeral=True)
+        await sp.start_check(interaction, interaction.user.id)
+
     @group.command(name="preview", description="Show what a rare-find animation looks like (doesn't give the ore)")
     @admin_only
     async def preview(self, interaction: discord.Interaction, ore: str):
