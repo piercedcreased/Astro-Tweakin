@@ -49,7 +49,7 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 ## Update notes with a webhook
 
 1. In your updates channel: ⚙️ Edit Channel → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**, and paste it into `UPDATE_WEBHOOK_URL` in `.env`.
-2. Save your custom GIF as `assets/update.gif`.
+2. The image posted with every update is `assets/update.jpg`. Swap it for any `update.gif`, `.png` or `.jpg`.
 3. Write the notes in a file under `updates/` (the first `# ` line is the title).
 4. Run `post_update.bat updates\0.1.0.md`. Add `--dry-run` to preview without posting.
 

@@ -85,7 +85,7 @@ class Game(commands.Cog):
             f"💰 **{user['coins']:,}** coins",
             f"{layer.realm_info.emoji} {layer.realm_info.name}  ·  {layer.planet_info.emoji} **{layer.planet_info.name}**  ·  🕳️ {layer.name}",
             f"⛏️ {pick.name}",
-            f"🍀 Luck **x{luck.total:,.2f}**  ·  ⏱️ {engine.cooldown_for(self.db, user):.1f}s  ·  {engine.rolls_for(self.db, user)} ore/swing",
+            f"🍀 Luck **x{luck.total:,.2f}**  ·  ⏱️ {engine.cooldown_for(self.db, user):.2g}s  ·  {engine.rolls_for(self.db, user)} ore/swing",
         ]
         buffs = self.db.buffs(uid)
         if buffs:
@@ -271,7 +271,7 @@ class Game(commands.Cog):
     async def do_mine(self, interaction, uid):
         wait = self.next_swing.get(uid, 0) - time.time()
         if wait > 0:
-            await interaction.response.send_message(f"Catching your breath... swing again in {wait:.1f}s.", ephemeral=True)
+            await interaction.response.defer()   # too fast: quietly ignore the click, no popup
             return
         user = self.db.user(uid)
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)

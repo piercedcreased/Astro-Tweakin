@@ -282,20 +282,20 @@ class Pickaxe:
 
 
 PICKAXES = [
-    Pickaxe("wood", "Wooden Pickaxe", 0, {}, 1.0, 3.0, 1, (150, 100, 50)),
-    Pickaxe("stone", "Stone Pickaxe", 250, {}, 1.1, 2.7, 1, (130, 130, 130)),
-    Pickaxe("copper", "Copper Pickaxe", 1_500, {"bar:copper": 5}, 1.2, 2.5, 1, (200, 110, 60)),
-    Pickaxe("iron", "Iron Pickaxe", 8_000, {"bar:iron": 10}, 1.35, 2.2, 1, (200, 190, 180)),
-    Pickaxe("gold", "Golden Pickaxe", 40_000, {"bar:gold": 10}, 1.6, 2.0, 2, (240, 190, 40)),
-    Pickaxe("diamond", "Diamond Pickaxe", 250_000, {"ore:diamond": 1, "bar:gold": 20}, 2.0, 1.8, 2, (170, 235, 255)),
-    Pickaxe("obsidian", "Obsidian Pickaxe", 1_500_000, {"ore:obsidian_heart": 1, "bar:iron": 40}, 2.5, 1.6, 3, (90, 30, 120)),
-    Pickaxe("slugsteel", "Slugsteel Pickaxe", 10_000_000, {"ore:slugheart_opal": 1, "bar:silver": 50}, 3.5, 1.4, 3, (130, 230, 80)),
-    Pickaxe("starbreaker", "Starbreaker", 20_000_000, {"ore:sunshard": 2, "bar:gold": 100}, 4.5, 1.2, 4, (255, 240, 160)),
-    Pickaxe("moon_drill", "Moon Drill", 200_000_000, {"ore:lunar_pearl": 1, "ore:selenite": 5}, 5.5, 1.1, 4, (200, 200, 230)),
-    Pickaxe("plasma", "Plasma Pick", 2_000_000_000, {"ore:red_giant_garnet": 1, "ore:olympus_ruby": 5}, 7.0, 1.0, 5, (255, 90, 40)),
-    Pickaxe("shroom_scythe", "Shroom Scythe", 20_000_000_000, {"ore:mushroom_kings_cap": 1, "ore:bouncy_cap": 5}, 8.5, 0.9, 5, (230, 40, 60)),
-    Pickaxe("lollipick", "Lollipick", 200_000_000_000, {"ore:gobstopper": 1, "ore:cotton_cloud": 5}, 10.0, 0.8, 6, (255, 100, 180)),
-    Pickaxe("void_breaker", "Void Breaker", 5_000_000_000_000, {"ore:horizon_opal": 1, "ore:singularity_shard": 10}, 12.0, 0.7, 7, (120, 40, 220)),
+    Pickaxe("wood", "Wooden Pickaxe", 0, {}, 1.0, 1.0, 1, (150, 100, 50)),
+    Pickaxe("stone", "Stone Pickaxe", 250, {}, 1.1, 0.9, 1, (130, 130, 130)),
+    Pickaxe("copper", "Copper Pickaxe", 1_500, {"bar:copper": 5}, 1.2, 0.85, 1, (200, 110, 60)),
+    Pickaxe("iron", "Iron Pickaxe", 8_000, {"bar:iron": 10}, 1.35, 0.8, 1, (200, 190, 180)),
+    Pickaxe("gold", "Golden Pickaxe", 40_000, {"bar:gold": 10}, 1.6, 0.75, 2, (240, 190, 40)),
+    Pickaxe("diamond", "Diamond Pickaxe", 250_000, {"ore:diamond": 1, "bar:gold": 20}, 2.0, 0.7, 2, (170, 235, 255)),
+    Pickaxe("obsidian", "Obsidian Pickaxe", 1_500_000, {"ore:obsidian_heart": 1, "bar:iron": 40}, 2.5, 0.65, 3, (90, 30, 120)),
+    Pickaxe("slugsteel", "Slugsteel Pickaxe", 10_000_000, {"ore:slugheart_opal": 1, "bar:silver": 50}, 3.5, 0.6, 3, (130, 230, 80)),
+    Pickaxe("starbreaker", "Starbreaker", 20_000_000, {"ore:sunshard": 2, "bar:gold": 100}, 4.5, 0.55, 4, (255, 240, 160)),
+    Pickaxe("moon_drill", "Moon Drill", 200_000_000, {"ore:lunar_pearl": 1, "ore:selenite": 5}, 5.5, 0.5, 4, (200, 200, 230)),
+    Pickaxe("plasma", "Plasma Pick", 2_000_000_000, {"ore:red_giant_garnet": 1, "ore:olympus_ruby": 5}, 7.0, 0.45, 5, (255, 90, 40)),
+    Pickaxe("shroom_scythe", "Shroom Scythe", 20_000_000_000, {"ore:mushroom_kings_cap": 1, "ore:bouncy_cap": 5}, 8.5, 0.4, 5, (230, 40, 60)),
+    Pickaxe("lollipick", "Lollipick", 200_000_000_000, {"ore:gobstopper": 1, "ore:cotton_cloud": 5}, 10.0, 0.35, 6, (255, 100, 180)),
+    Pickaxe("void_breaker", "Void Breaker", 5_000_000_000_000, {"ore:horizon_opal": 1, "ore:singularity_shard": 10}, 12.0, 0.3, 7, (120, 40, 220)),
 ]
 PICKAXE_BY_KEY = {p.key: p for p in PICKAXES}
 
