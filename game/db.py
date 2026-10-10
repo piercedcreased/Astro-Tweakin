@@ -5,9 +5,9 @@ Data-safety rules:
   through rolls the whole action back instead of leaving half a purchase.
 - Coins and item counts can never go below zero: a write that would do that raises
   NotEnough and the action is rolled back.
-- WAL + synchronous=NORMAL: the save can't be corrupted by a crash or power cut, and the bot
-  calls checkpoint() every few seconds so at most those last few seconds could be lost if the PC
-  loses power. (FULL synced to disk on every click, which made buttons slow on Windows.)
+- WAL + a background "flusher": every save is written to disk (fsync) by a separate thread the moment
+  it happens, so a power cut can't lose a finished action, but buttons never wait for the disk.
+  (Syncing inside every click made buttons slow on Windows.) The save can't be corrupted either way.
 - Backups: see game/backup.py.
 """
 import contextlib
@@ -146,6 +146,9 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._depth = 0
+        self._dirty = threading.Event()
+        self._stop = False
+        self._flusher = None
         self.check_integrity()
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
@@ -188,15 +191,43 @@ class DB:
                 self._depth -= 1
                 if outer:
                     self.conn.execute("COMMIT")
+                    self._dirty.set()
 
-    def checkpoint(self):
-        """Flushes recent changes into the main save file on disk (fsync). Run from a background thread."""
-        with self._lock:
-            if self._depth == 0:
-                self.conn.execute("DELETE FROM buffs WHERE expires < ?", (time.time(),))
-                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    def start_flusher(self, idle=5.0):
+        """Starts the background thread that puts every save on disk right after it happens."""
+        if self._flusher is None:
+            self._flusher = threading.Thread(target=self._flush_loop, args=(idle,), name="save-flusher", daemon=True)
+            self._flusher.start()
+
+    def _flush_loop(self, idle):
+        # Its own connection, so the disk sync never holds up the bot. A checkpoint fsyncs the WAL file
+        # (which makes every finished save permanent) and copies it into the main save file.
+        conn = sqlite3.connect(self.path, timeout=30, isolation_level=None, check_same_thread=False)
+        conn.execute("PRAGMA synchronous=NORMAL")
+        last_clean = 0.0
+        try:
+            while not self._stop:
+                self._dirty.wait(idle)
+                self._dirty.clear()
+                try:
+                    if time.time() - last_clean > 300:
+                        conn.execute("DELETE FROM buffs WHERE expires < ?", (time.time(),))
+                        last_clean = time.time()
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except sqlite3.Error:
+                    log.exception("Background save flush failed (will retry)")
+        finally:
+            conn.close()
+
+    def stop_flusher(self):
+        if self._flusher is not None:
+            self._stop = True
+            self._dirty.set()
+            self._flusher.join(timeout=10)
+            self._flusher = None
 
     def close(self):
+        self.stop_flusher()
         with self._lock:
             with contextlib.suppress(Exception):
                 self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -212,7 +243,10 @@ class DB:
 
     def run(self, sql, *args):
         with self._lock:
-            return self.conn.execute(sql, args)
+            cur = self.conn.execute(sql, args)
+            if self._depth == 0:
+                self._dirty.set()       # a write outside a transaction is saved right away too
+            return cur
 
     # users
     def user(self, uid, name=None):

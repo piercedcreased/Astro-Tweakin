@@ -38,7 +38,7 @@ class AstroTweakin(commands.Bot):
         await asyncio.to_thread(backup.make_backup, self.db, "startup")
         self.auto_backup.change_interval(minutes=float(os.getenv("BACKUP_EVERY_MINUTES") or 30))
         self.auto_backup.start()
-        self.flush_saves.start()
+        self.db.start_flusher()
         await self.load_extension("cogs.game")
         await self.load_extension("cogs.space")
         await self.load_extension("cogs.admin")
@@ -58,21 +58,12 @@ class AstroTweakin(commands.Bot):
         except Exception:
             log.exception("Automatic backup failed")
 
-    @tasks.loop(seconds=5)
-    async def flush_saves(self):
-        # pushes the last few seconds of play into the save file so a power cut can't lose more than that
-        try:
-            await asyncio.to_thread(self.db.checkpoint)
-        except Exception:
-            log.exception("Save checkpoint failed")
-
     @auto_backup.before_loop
     async def _skip_first(self):
         await asyncio.sleep(60)
 
     async def close(self):
         self.auto_backup.cancel()
-        self.flush_saves.cancel()
         try:
             backup.make_backup(self.db, "shutdown")
         except Exception:
