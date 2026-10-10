@@ -27,7 +27,7 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | `/rebirth` | "Burn the lab down" at Slug Core with 50M coins: reset for +50% luck and +25% sell value forever. |
 
 Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/leaderboard`, `/help`.
-Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin preview`.
+Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`.
 
 ## Running it on your PC
 
@@ -50,8 +50,10 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 
 1. In your updates channel: ⚙️ Edit Channel → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**, and paste it into `UPDATE_WEBHOOK_URL` in `.env`.
 2. The image posted with every update is `assets/update.jpg`. Swap it for any `update.gif`, `.png` or `.jpg`.
-3. Write the notes in a file under `updates/` (the first `# ` line is the title).
-4. Run `post_update.bat updates\0.1.0.md`. Add `--dry-run` to preview without posting.
+
+**It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted by the bot the next time it starts. Posted files are remembered in `updates/posted.txt`, so nothing posts twice. To restart without touching the PC, use `/admin restart` in Discord.
+
+To post one by hand, double-click `post_update.bat` (it posts the newest notes) or run `post_update.bat updates\0.1.0.md`.
 
 ## Keeping player data safe
 

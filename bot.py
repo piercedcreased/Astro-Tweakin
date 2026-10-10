@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from discord.ext import tasks
 
-from game import backup
+from game import backup, updates
 from game.db import DB, CorruptDatabase
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -71,6 +71,13 @@ class AstroTweakin(commands.Bot):
 
     async def on_ready(self):
         log.info("Logged in as %s (%s)", self.user, self.user.id)
+        if not getattr(self, "_posted_updates", False):
+            self._posted_updates = True
+            try:
+                for title in await asyncio.to_thread(updates.post_pending):
+                    log.info("Announced update: %s", title)
+            except Exception:
+                log.exception("Couldn't post update notes (the bot keeps running)")
         await self.change_presence(activity=discord.Game("/mine"))
 
 

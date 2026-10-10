@@ -59,6 +59,12 @@ class Admin(commands.Cog):
         n = len(backup.list_backups())
         await interaction.followup.send(f"Backup saved: `{path}` ({n} backups kept).", ephemeral=True)
 
+    @group.command(name="restart", description="Restart the bot to load new code and post new update notes")
+    @admin_only
+    async def restart(self, interaction: discord.Interaction):
+        await interaction.response.send_message("🔄 Restarting. Back in about 10 seconds.", ephemeral=True)
+        await self.bot.close()   # start.bat brings it straight back up
+
     @group.command(name="preview", description="Show what a rare-find animation looks like (doesn't give the ore)")
     @admin_only
     async def preview(self, interaction: discord.Interaction, ore: str):

@@ -8,3 +8,4 @@ __pycache__/
 assets/cache/
 backups/
 *.before-restore-*
+updates/posted.txt
