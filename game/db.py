@@ -84,7 +84,9 @@ CREATE TABLE IF NOT EXISTS meta (
 # Columns added in later versions get listed here, so old save files are upgraded in place
 # (never wiped) when the bot starts. Format: (table, column, definition)
 MIGRATIONS = [
-    # ("users", "favorite_ore", "TEXT"),
+    ("users", "autosell", "INTEGER NOT NULL DEFAULT 0"),          # v0.2.0
+    ("users", "daily_last", "REAL NOT NULL DEFAULT 0"),           # v0.2.0
+    ("users", "daily_streak", "INTEGER NOT NULL DEFAULT 0"),      # v0.2.0
 ]
 
 

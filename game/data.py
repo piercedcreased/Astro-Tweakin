@@ -349,3 +349,9 @@ PRIZE_BY_KEY = {p.key: p for p in PRIZES}
 REBIRTH_COST = 50_000_000
 REBIRTH_LUCK = 0.5        # +50% luck per rebirth
 REBIRTH_SELL = 0.25       # +25% sell value per rebirth
+
+# Daily reward: claim every 20h, streak breaks after 48h. Streak adds +10% a day (max +100%),
+# and every 7th day also gives a free Lucky Roll recharge and 30 minutes of x2 luck.
+DAILY_COOLDOWN = 20 * 3600
+DAILY_GRACE = 48 * 3600
+AUTOSELL_MAX_TIER = "uncommon"   # auto-sell only sells common and uncommon ores

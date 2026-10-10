@@ -514,3 +514,53 @@ def pickaxe_icon(pick):
         img.resize((128, 128), Image.LANCZOS).save(path)
     with open(path, "rb") as f:
         return f.read()
+
+
+# ---------------------------------------------------------------- shop banner
+
+SHOP_BG = os.path.join(ROOT, "assets", "shop_bg.png")   # swap this file to change the shop picture
+
+
+def shop_banner(coins, goals, pick=None):
+    """The shop picture with a title on top and your coins, next pickaxe and goal bars along the bottom.
+    goals: [(label, fraction)] from engine.goals()."""
+    if os.path.exists(SHOP_BG):
+        img = Image.open(SHOP_BG).convert("RGB")
+        img = img.resize((500, int(img.height * 500 / img.width)), Image.LANCZOS)
+    else:
+        img = Image.new("RGB", (500, 400), (25, 20, 35))
+    W, H = img.size
+    # dark fades at top and bottom so the text reads on any picture
+    shade = Image.new("L", (W, H), 0)
+    sd = ImageDraw.Draw(shade)
+    band = 70 + 34 * len(goals)
+    for y in range(H):
+        a = 0
+        if y < 70:
+            a = int(170 * (1 - y / 70))
+        elif y > H - band - 40:
+            a = int(225 * min(1, (y - (H - band - 40)) / 40))
+        sd.line([(0, y), (W, y)], fill=a)
+    img = Image.composite(Image.new("RGB", (W, H), (8, 6, 14)), img, shade)
+    d = ImageDraw.Draw(img)
+    _outlined(d, (W / 2, 30), "ASTRO TWEAKIN SHOP", 34, (120, 255, 140))
+    y = H - band + 8
+    _outlined(d, (16, y), f"{coins:,} coins", 24, (255, 215, 60), anchor="lm", stroke=3)
+    if pick:
+        ic = Image.open(io.BytesIO(pickaxe_icon(pick))).convert("RGBA").resize((64, 64), Image.LANCZOS)
+        img.paste(ic, (W - 76, y - 34), ic)
+    y += 30
+    for label, frac in goals:
+        # emoji don't render in the image font, so strip the leading icon
+        text = label.split(" ", 1)[1] if " " in label else label
+        _outlined(d, (16, y + 8), text, 18, (255, 255, 255), anchor="lm", stroke=2)
+        x0, x1 = 250, W - 70
+        d.rounded_rectangle([x0, y, x1, y + 16], radius=8, fill=(40, 40, 55), outline=(90, 90, 110), width=2)
+        if frac > 0:
+            d.rounded_rectangle([x0 + 2, y + 2, x0 + 2 + int((x1 - x0 - 4) * min(frac, 1)), y + 14], radius=6,
+                                fill=(90, 230, 120) if frac >= 1 else (240, 190, 60))
+        _outlined(d, (W - 16, y + 8), f"{int(frac * 100)}%", 16, (255, 255, 255), anchor="rm", stroke=2)
+        y += 34
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=88)
+    return buf.getvalue()

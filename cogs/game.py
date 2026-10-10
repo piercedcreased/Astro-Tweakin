@@ -95,6 +95,8 @@ class Game(commands.Cog):
         ev = self.db.event()
         if ev:
             lines.append(f"🎉 Server event: **{ev['label']}** x{ev['luck']:g} luck ({fmt_time(ev['expires'] - time.time())})")
+        for label, frac in engine.goals(self.db, uid):
+            lines.append(f"🎯 {label}  {engine.bar(frac)} {int(frac * 100)}%")
         if user["sluglings"]:
             waiting = min(time.time() - user["last_collect"], data.COLLECT_CAP_HOURS * 3600)
             n = int(waiting // data.SLUGLING_SECONDS_PER_ROLL) * user["sluglings"]
@@ -114,6 +116,9 @@ class Game(commands.Cog):
         v.add_item(B("inv", uid, "Inventory", "🎒", row=1))
         v.add_item(B("up", uid, "Up", "⬆️", disabled=user["layer"] <= 1, row=1))
         v.add_item(B("down", uid, "Down", "⬇️", disabled=user["layer"] >= len(LAYERS), row=1))
+        on = bool(user["autosell"])
+        v.add_item(B("autosell", uid, f"Auto-sell: {'ON' if on else 'OFF'}", "♻️",
+                     discord.ButtonStyle.success if on else discord.ButtonStyle.secondary, row=1))
         return v
 
     def main_panel(self, uid, headline=None, ores=None, note=None):
@@ -140,7 +145,7 @@ class Game(commands.Cog):
 
     def shop_panel(self, uid, note=None):
         user = self.db.user(uid)
-        e = discord.Embed(title="🛒 Slug Shop", color=discord.Color.gold())
+        e = discord.Embed(title="🛒 Astro Tweakin Shop", color=discord.Color.from_rgb(90, 230, 120))
         nxt = engine.next_pickaxe(user)
         if nxt:
             mats = ", ".join(f"{q}x {engine.item_name(i)} (have {self.db.qty(uid, i)})" for i, q in nxt.materials.items())
@@ -176,10 +181,9 @@ class Game(commands.Cog):
         v.add_item(B("smelt", uid, "Smelt all", "🔥"))
         v.add_item(B("workshop", uid, "Workshop", "🔧", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
-        files = []
-        if nxt:
-            files.append(discord.File(io.BytesIO(images.pickaxe_icon(nxt)), filename="pick.png"))
-            e.set_thumbnail(url="attachment://pick.png")
+        banner = images.shop_banner(user["coins"], engine.goals(self.db, uid), nxt)
+        files = [discord.File(io.BytesIO(banner), filename="shop.jpg")]
+        e.set_image(url="attachment://shop.jpg")
         return e, files, v
 
     def workshop_panel(self, uid, note=None):
@@ -276,7 +280,8 @@ class Game(commands.Cog):
         user = self.db.user(uid)
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)
         res = engine.swing(self.db, uid)
-        await self.show(interaction, self.main_panel(uid, ores=res.ores))
+        head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
+        await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores))
         await self.celebrate(interaction, res.best)
 
     async def celebrate(self, interaction, ore):
@@ -334,16 +339,25 @@ class Game(commands.Cog):
             await self.show(interaction, self.main_panel(uid, headline="🐌 Your sluglings haven't dug anything yet. Give them a minute."))
             return
         best = max(ores, key=lambda o: o.chance)
+        sold = engine.autosell(self.db, uid)
         counts = collections.Counter(o.key for o in ores)
         top = sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance)[:8]
         lines = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in top)
         more = len(counts) - len(top)
-        head = f"🐌 Your sluglings dug **{len(ores):,}** ores over {fmt_time(elapsed)}:\n{lines}" + (f"\n…and {more} more kinds" if more > 0 else "")
+        head = f"🐌 Your sluglings dug **{len(ores):,}** ores over {fmt_time(elapsed)}:\n{lines}" + (f"\n…and {more} more kinds" if more > 0 else "") \
+            + (f"\n♻️ Auto-sold for **{sold:,}** coins" if sold else "")
         e, files, v = self.main_panel(uid, headline=head)
         files = [ore_file(best)]
         e.set_thumbnail(url="attachment://ore.png")
         await interaction.response.edit_message(embed=e, attachments=files, view=v)
         await self.celebrate(interaction, best)
+
+    async def do_autosell(self, interaction, uid):
+        on = engine.toggle_autosell(self.db, uid)
+        msg = ("♻️ **Auto-sell is ON.** Common and uncommon ores get sold as you mine them. "
+               "Rarer ores and anything you need for your next pickaxe or planet are kept.") if on \
+            else "♻️ **Auto-sell is OFF.** Ores stay in your bag until you sell them."
+        await self.show(interaction, self.main_panel(uid, headline=msg))
 
     async def do_shop(self, interaction, uid):
         await self.show(interaction, self.shop_panel(uid))
@@ -465,6 +479,55 @@ class Game(commands.Cog):
         return [app_commands.Choice(name=engine.layer_label(l).split(" ", 1)[1], value=l.num)
                 for l in LAYERS[:user["max_layer"]] if current.lower() in engine.layer_label(l).lower()][:25]
 
+    @app_commands.command(name="daily", description="Claim your daily coins. Keep a streak going for bigger rewards")
+    async def daily(self, interaction: discord.Interaction):
+        uid = interaction.user.id
+        self.db.user(uid, interaction.user.display_name)
+        ok, msg = engine.claim_daily(self.db, uid)
+        e = discord.Embed(title="📅 Daily Reward", description=msg,
+                          color=discord.Color.green() if ok else discord.Color.dark_grey())
+        await interaction.response.send_message(embed=e, ephemeral=not ok)
+
+    @app_commands.command(name="ore", description="Look up any ore: picture, odds, value and where to find it")
+    async def ore(self, interaction: discord.Interaction, name: str):
+        o = ORE_BY_KEY.get(name) or next((x for x in data.ORES if x.name.lower() == name.lower()), None)
+        if not o:
+            await interaction.response.send_message("No ore by that name. Pick one from the list as you type.", ephemeral=True)
+            return
+        found = self.db.discovered(interaction.user.id)
+        seen = o.key in found
+        where = ", ".join(engine.layer_label(LAYERS[n - 1]).split(" ", 1)[1] for n in o.layers)
+        e = discord.Embed(title=f"{TIER_EMOJI[o.tier]} {o.name if seen else '???'}", color=color_of(o.tier_info.color))
+        e.add_field(name="Rarity", value=f"{o.tier_info.name} · {fmt_chance(o.chance)}")
+        e.add_field(name="Sells for", value=f"{o.value:,} coins")
+        e.add_field(name="You've found", value=f"{found.get(o.key, 0):,}")
+        e.add_field(name="Found in", value=where[:1024], inline=False)
+        files = []
+        if seen:
+            files.append(ore_file(o))
+            e.set_thumbnail(url="attachment://ore.png")
+        else:
+            e.description = "You haven't found this one yet, so its name and look are hidden."
+        await interaction.response.send_message(embed=e, files=files, ephemeral=True)
+
+    @ore.autocomplete("name")
+    async def ore_autocomplete(self, interaction, current: str):
+        found = self.db.discovered(interaction.user.id)
+        return [app_commands.Choice(name=(o.name if o.key in found else f"??? ({fmt_chance(o.chance)})")[:100], value=o.key)
+                for o in data.ORES
+                if current.lower() in (o.name.lower() if o.key in found else "???")][:25]
+
+    @app_commands.command(name="finds", description="The latest rare finds across the server")
+    async def finds(self, interaction: discord.Interaction):
+        rows = self.db.q("SELECT f.ore, f.at, u.name FROM finds f LEFT JOIN users u ON u.id = f.user_id "
+                         "ORDER BY f.at DESC LIMIT 15")
+        lines = [f"{TIER_EMOJI[ORE_BY_KEY[r['ore']].tier]} **{r['name'] or 'Someone'}** found "
+                 f"**{ORE_BY_KEY[r['ore']].name}** ({fmt_chance(ORE_BY_KEY[r['ore']].chance)}) <t:{int(r['at'])}:R>"
+                 for r in rows if r["ore"] in ORE_BY_KEY]
+        e = discord.Embed(title="💎 Recent rare finds", color=discord.Color.gold(),
+                          description="\n".join(lines) or "Nobody has found anything 1 in 10,000 or rarer yet.")
+        await interaction.response.send_message(embed=e)
+
     @app_commands.command(name="leaderboard", description="Top miners")
     @app_commands.choices(by=[app_commands.Choice(name="Coins", value="coins"),
                               app_commands.Choice(name="Rarest find", value="best"),
@@ -512,10 +575,12 @@ class Game(commands.Cog):
             "🛒 **Shop**: craft pickaxes, dig deeper, hire sluglings.\n"
             "🔧 **Workshop**: build rocket parts from ores, then 🚀 launch to new planets and 🌀 warp to new realms.\n"
             "🐌 **Sluglings** dig while you're offline. Hit **Collect** to bank it.\n"
+            "♻️ **Auto-sell** sells common and uncommon ores as you mine.\n"
+            "📅 **/daily** gives coins. Keep the streak going for bigger rewards.\n"
             "🔥 **/rebirth** burns the lab down for permanent boosts.\n\n"
             "Every planet hides one ultra-rare piece of 🚨 **contraband**. Legendary and rarer finds "
             "get a special animation and get announced to the server.\n"
-            "**/travel** · **/index** · **/profile** · **/leaderboard**"))
+            "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**"))
         await interaction.response.send_message(embed=e, ephemeral=True)
 
 

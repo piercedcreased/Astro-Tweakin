@@ -94,6 +94,7 @@ class SwingResult:
     ores: list            # list of Ore
     best: object
     luck: Luck
+    autosold: int = 0     # coins from auto-sell
 
 
 @atomic
@@ -123,21 +124,93 @@ def swing(db, uid):
     luck = luck_for(db, user)
     ores = [roll_ore(user["layer"], luck.total) for _ in range(rolls_for(db, user))]
     best = record_finds(db, uid, ores)
-    return SwingResult(ores, best, luck)
+    coins = autosell(db, uid)
+    return SwingResult(ores, best, luck, coins)
+
+
+def autosell(db, uid):
+    """If the player has auto-sell on, sells their common/uncommon ores. Returns coins made."""
+    if not db.user(uid)["autosell"]:
+        return 0
+    return sell_all(db, uid, max_tier=data.AUTOSELL_MAX_TIER)[1]
 
 
 @atomic
-def sell_all(db, uid, keep_rare=True):
-    """Sells ores. Epic+ ores and bars are kept unless keep_rare is False."""
+def toggle_autosell(db, uid):
+    on = not db.user(uid)["autosell"]
+    db.set(uid, autosell=int(on))
+    return on
+
+
+def _progress(db, uid, coins, materials):
+    """0..1 of how close you are to affording coins + materials (each requirement weighs the same)."""
+    user = db.user(uid)
+    parts = []
+    if coins:
+        parts.append(min(1.0, user["coins"] / coins))
+    for item, qty in materials.items():
+        parts.append(min(1.0, db.qty(uid, item) / qty))
+    return sum(parts) / len(parts) if parts else 1.0
+
+
+def goals(db, uid):
+    """[(label, fraction)] for the next pickaxe and the next layer/planet."""
+    user = db.user(uid)
+    out = []
+    nxt = next_pickaxe(user)
+    if nxt:
+        out.append((f"⛏️ {nxt.name}", _progress(db, uid, nxt.price, nxt.materials)))
+    if user["max_layer"] < len(LAYERS):
+        L = LAYERS[user["max_layer"]]
+        icon = "🌀" if is_new_realm(L) else "🚀" if is_new_planet(L) else "🕳️"
+        name = L.planet_info.name if is_new_planet(L) else L.name
+        out.append((f"{icon} {name}", _progress(db, uid, L.cost, L.materials)))
+    return out
+
+
+def bar(frac, width=10):
+    full = int(round(frac * width))
+    return "▰" * full + "▱" * (width - full)
+
+
+@atomic
+def claim_daily(db, uid):
+    user = db.user(uid)
+    now = time.time()
+    since = now - user["daily_last"]
+    if since < data.DAILY_COOLDOWN:
+        return False, f"Your next daily is ready in {fmt_time(data.DAILY_COOLDOWN - since)}."
+    streak = user["daily_streak"] + 1 if since <= data.DAILY_GRACE else 1
+    mult = 1 + min(streak - 1, 10) * 0.1
+    coins = int(500 * (3 ** (user["max_layer"] - 1)) * mult)
+    db.add_coins(uid, coins)
+    db.set(uid, daily_last=now, daily_streak=streak)
+    msg = f"📅 Day **{streak}** streak! You got **{coins:,} coins** (x{mult:.1f} streak bonus)."
+    if streak % 7 == 0:
+        db.set(uid, last_roll=0)
+        db.add_buff(uid, "luck", 2, 30 * 60)
+        msg += "\n🎁 **Weekly bonus:** your Lucky Roll is recharged and you have **x2 luck for 30 minutes**!"
+    elif since > data.DAILY_GRACE and user["daily_streak"]:
+        msg += f"\n(Your old {user['daily_streak']}-day streak ran out. Come back within 48h to keep it going.)"
+    return True, msg
+
+
+@atomic
+def sell_all(db, uid, keep_rare=True, max_tier=None):
+    """Sells ores. Epic+ ores and bars are kept unless keep_rare is False.
+    max_tier (used by auto-sell) only sells ores up to that tier and never bars."""
     user = db.user(uid)
     mult = sell_mult(user)
     total = 0
     sold = 0
+    cap = data.TIER_ORDER.index(max_tier) if max_tier else None
     for item, qty in db.items(uid).items():
         kind, key = item.split(":", 1)
         if kind == "ore":
             ore = ORE_BY_KEY[key]
             if keep_rare and data.TIER_ORDER.index(ore.tier) >= data.TIER_ORDER.index("epic"):
+                continue
+            if cap is not None and data.TIER_ORDER.index(ore.tier) > cap:
                 continue
             # keep materials needed for the next pickaxe
             keep = next_pick_needs(user).get(item, 0)
@@ -146,7 +219,7 @@ def sell_all(db, uid, keep_rare=True):
                 continue
             total += ore.value * n
         elif kind == "bar":
-            if keep_rare:
+            if keep_rare or cap is not None:
                 continue                        # bars are crafting material, only "sell everything" sells them
             keep = next_pick_needs(user).get(item, 0)
             n = qty - keep
