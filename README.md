@@ -1,0 +1,64 @@
+# 🚀 Astro Tweakin
+
+A crude little space-mining incremental game for Discord. Start in the slug caves of **Slug Earth**, build rockets, and work your way across 3 realms and 7 planets. There are 86 ores, from **Stone** (1 in 1) to **The Last Gram in the Universe** (1 in 1,000,000,000). Every planet hides one ultra-rare piece of joke 🚨 contraband. Rare finds get their own animated reveal and a server-wide shout.
+
+| Realm | Planets | Contraband |
+|---|---|---|
+| 🌌 The Milky Way | 🌍 Slug Earth, 🌕 The Moon, 🔴 Mars | Grandma's Blue Crystal, Moon Rocks (the other kind), Martian K-Dust |
+| 🍄 The Trippy Dimension | 🍄 Shroomtopia, 🍭 Candy Nebula | The Cosmic Shroom, Space Pez |
+| 🕳️ The Void Realm | ⚫ The Singularity, ⬛ The Nothing | Pure Uncut Stardust, The Last Gram in the Universe |
+
+Flying to a new planet costs coins, rare ores and rocket parts you build in the 🔧 Workshop. Warping to a new realm also needs a Warp Core or Void Engine.
+
+![All ores](assets/preview/ores.png)
+
+## Playing
+
+`/mine` opens your mine. Everything else is buttons.
+
+| | |
+|---|---|
+| ⛏️ Mine | Rolls for ores. Each ore has a "1 in N" chance and your luck divides N. |
+| 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, haste or double dig. |
+| 💰 Sell | Sells ores. Keeps Epic+ ores, bars and the materials for your next pickaxe. |
+| 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars. |
+| 🔧 Workshop | Build rocket parts (fuel, hull, nav computer, oxygen, warp core...) from ores. |
+| 🐌 Collect | Sluglings dig 1 ore a minute each while you're offline (up to 12h). |
+| `/rebirth` | "Burn the lab down" at Slug Core with 50M coins: reset for +50% luck and +25% sell value forever. |
+
+Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/leaderboard`, `/help`.
+Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin preview`.
+
+## Running it on your PC
+
+1. Install **Python 3.11 or newer** from python.org (tick "Add python.exe to PATH" in the installer).
+2. Double-click `start.bat`. The first run sets everything up and opens `.env` in Notepad.
+3. Paste your bot token into `.env` (see below), save, and run `start.bat` again.
+
+Leave the window open; the bot runs as long as it's open and restarts itself if it crashes.
+To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a shortcut to `start.bat` in that folder.
+
+## Creating the Discord bot
+
+1. Go to <https://discord.com/developers/applications> → **New Application** → name it Astro Tweakin.
+2. **Bot** tab → **Reset Token** → copy it into `DISCORD_TOKEN` in `.env`. Treat it like a password.
+3. **Installation** tab (or OAuth2 → URL Generator): scopes `bot` and `applications.commands`; permissions **Send Messages**, **Embed Links**, **Attach Files**, **Use External Emojis**, **Read Message History**. Open the link to invite it to your server.
+4. In Discord turn on Developer Mode (Settings → Advanced), then right-click your server → **Copy Server ID** into `GUILD_ID`, and right-click yourself → **Copy User ID** into `ADMIN_USER_IDS`.
+5. In your server run `/admin announce #channel` to pick where rare finds get shouted.
+
+## Update notes with a webhook
+
+1. In your updates channel: ⚙️ Edit Channel → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**, and paste it into `UPDATE_WEBHOOK_URL` in `.env`.
+2. Save your custom GIF as `assets/update.gif`.
+3. Write the notes in a file under `updates/` (the first `# ` line is the title).
+4. Run `post_update.bat updates\0.1.0.md`. Add `--dry-run` to preview without posting.
+
+## Custom ore art
+
+Every image is drawn in code (`game/images.py`). To use your own art for an ore, save a square PNG with a transparent background as `assets/ores/<ore key>.png`, for example `assets/ores/sunshard.png`. Ore keys are in `game/data.py`. Good free generators for this: Microsoft Designer / Bing Image Creator (free, DALL·E based), ChatGPT's free image generation, or Google Gemini. A prompt that works well: *"single glowing purple crystal ore, game item icon, centered, transparent background, stylized, no text"*.
+
+Keep the bot in your own servers. Discord's public app directory doesn't like drug jokes, even fake ones..
+
+## Tweaking the game
+
+All numbers live in `game/data.py`: ores, chances, values, realms, planets, layers, rocket parts, pickaxes, lucky roll prizes and rebirth. `python -m tools.simulate` shows what each layer drops, and `python -m tools.render_all` renders every ore and a few reveal GIFs into `assets/preview/`.

@@ -1,0 +1,351 @@
+"""All the static game content: tiers, ores, realms, planets, layers, pickaxes, parts and lucky-roll prizes.
+
+Chances are written as "1 in N". Tweak numbers here to rebalance the game.
+"""
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class Tier:
+    name: str
+    color: tuple          # RGB used for embeds and effects
+    effect: int           # 0 none, 1 small flash, 2 full reveal GIF, 3 huge, 4 insane
+    announce: bool        # post to the server announce channel
+
+
+TIERS = {
+    "common":    Tier("Common",    (158, 158, 158), 0, False),
+    "uncommon":  Tier("Uncommon",  (88, 200, 98),   0, False),
+    "rare":      Tier("Rare",      (66, 135, 245),  0, False),
+    "epic":      Tier("Epic",      (170, 85, 240),  1, False),
+    "legendary": Tier("Legendary", (255, 190, 40),  2, True),
+    "mythic":    Tier("Mythic",    (255, 70, 120),  3, True),
+    "celestial": Tier("Celestial", (80, 230, 255),  3, True),
+    "divine":    Tier("Divine",    (255, 255, 255), 4, True),
+    "contraband": Tier("Contraband", (60, 255, 120), 5, True),   # each planet's joke drug. police-siren reveal
+}
+
+
+@dataclass(frozen=True)
+class Ore:
+    key: str
+    name: str
+    chance: int           # 1 in N
+    value: int            # coins when sold
+    tier: str
+    colors: tuple         # (main, highlight) RGB
+    shape: str            # chunk, crystal, gem, orb, crown, slug, star, baggie, pile, shroom, pill
+    layers: tuple         # layers this ore can drop in
+
+    @property
+    def tier_info(self) -> Tier:
+        return TIERS[self.tier]
+
+
+ALL = (1, 2, 3, 4, 5)          # every layer of Slug Earth
+def _from(n):
+    return tuple(range(n, 6))
+MOON, MARS, SHROOM, CANDY = (6, 7), (8, 9), (10, 11), (12, 13)
+
+
+ORES = [
+    # base ore for each layer (chance 1 = what you get when nothing rarer hits)
+    Ore("stone", "Stone", 1, 1, "common", ((120, 120, 125), (170, 170, 175)), "chunk", (1,)),
+    Ore("granite", "Granite", 1, 3, "common", ((150, 110, 100), (200, 160, 150)), "chunk", (2,)),
+    Ore("basalt", "Basalt", 1, 8, "common", ((60, 55, 60), (110, 100, 105)), "chunk", (3,)),
+    Ore("abyssal_shale", "Abyssal Shale", 1, 20, "common", ((40, 45, 80), (80, 90, 150)), "chunk", (4,)),
+    Ore("slugstone", "Slugstone", 1, 50, "common", ((90, 150, 70), (170, 230, 120)), "chunk", (5,)),
+    # commons
+    Ore("coal", "Coal", 3, 3, "common", ((35, 35, 38), (80, 80, 85)), "chunk", ALL),
+    Ore("copper", "Copper", 6, 6, "common", ((200, 110, 60), (245, 170, 120)), "chunk", ALL),
+    Ore("tin", "Tin", 10, 9, "common", ((180, 190, 195), (230, 235, 240)), "chunk", ALL),
+    Ore("iron", "Iron", 20, 18, "common", ((170, 140, 120), (225, 205, 190)), "chunk", ALL),
+    Ore("glowcap", "Glowcap Crystal", 15, 40, "common", ((80, 220, 180), (180, 255, 230)), "crystal", (2,)),
+    Ore("magmite", "Magmite", 25, 90, "common", ((230, 80, 20), (255, 190, 60)), "chunk", (3,)),
+    Ore("deepglass", "Deepglass", 8, 160, "common", ((40, 90, 160), (120, 190, 255)), "crystal", (4,)),
+    Ore("slime_pearl", "Slime Pearl", 5, 300, "common", ((140, 230, 90), (220, 255, 190)), "orb", (5,)),
+    # uncommons
+    Ore("silver", "Silver", 50, 45, "uncommon", ((190, 195, 205), (250, 250, 255)), "chunk", ALL),
+    Ore("gold", "Gold", 100, 90, "uncommon", ((230, 180, 30), (255, 235, 120)), "chunk", ALL),
+    Ore("quartz", "Quartz", 150, 130, "uncommon", ((230, 225, 235), (255, 255, 255)), "crystal", ALL),
+    Ore("jade", "Jade", 250, 220, "uncommon", ((40, 160, 90), (130, 230, 160)), "gem", _from(2)),
+    # rares
+    Ore("amethyst", "Amethyst", 500, 450, "rare", ((140, 70, 200), (210, 160, 255)), "crystal", ALL),
+    Ore("sapphire", "Sapphire", 900, 800, "rare", ((30, 70, 200), (110, 160, 255)), "gem", _from(2)),
+    Ore("ruby", "Ruby", 1_500, 1_300, "rare", ((200, 20, 50), (255, 110, 130)), "gem", _from(2)),
+    Ore("emerald", "Emerald", 2_500, 2_200, "rare", ((20, 170, 80), (120, 255, 170)), "gem", _from(3)),
+    # epics
+    Ore("diamond", "Diamond", 5_000, 5_000, "epic", ((170, 235, 255), (255, 255, 255)), "gem", ALL),
+    Ore("moonstone", "Moonstone", 12_000, 11_000, "epic", ((180, 190, 230), (240, 245, 255)), "orb", _from(2)),
+    Ore("obsidian_heart", "Obsidian Heart", 7_500, 7_000, "epic", ((40, 10, 50), (200, 60, 255)), "gem", _from(3)),
+    # legendaries (special reveal GIF + server announcement)
+    Ore("sunshard", "Sunshard", 25_000, 30_000, "legendary", ((255, 170, 20), (255, 245, 150)), "star", ALL),
+    Ore("slugheart_opal", "Slugheart Opal", 60_000, 75_000, "legendary", ((120, 255, 200), (255, 180, 240)), "orb", _from(2)),
+    Ore("voidstone", "Voidstone", 100_000, 130_000, "legendary", ((20, 0, 40), (150, 60, 255)), "orb", _from(4)),
+    # mythics
+    Ore("aurorite", "Aurorite", 250_000, 350_000, "mythic", ((60, 255, 170), (180, 100, 255)), "crystal", _from(2)),
+    Ore("prismara", "Prismara", 600_000, 900_000, "mythic", ((255, 90, 200), (120, 220, 255)), "gem", _from(3)),
+    Ore("chrono_crystal", "Chrono Crystal", 1_000_000, 1_600_000, "mythic", ((255, 210, 120), (120, 200, 255)), "crystal", _from(4)),
+    # celestials
+    Ore("nebulite", "Nebulite", 2_500_000, 4_500_000, "celestial", ((90, 40, 200), (255, 120, 220)), "orb", _from(3)),
+    Ore("starforged_core", "Starforged Core", 5_000_000, 10_000_000, "celestial", ((255, 255, 200), (120, 220, 255)), "star", _from(5)),
+    Ore("slug_kings_crown", "Slug King's Crown", 10_000_000, 22_000_000, "celestial", ((255, 200, 40), (255, 255, 200)), "crown", _from(5)),
+    # divines
+    Ore("eternium", "Eternium", 50_000_000, 120_000_000, "divine", ((255, 255, 255), (200, 160, 255)), "star", _from(5)),
+    Ore("golden_slug", "The Golden Slug", 100_000_000, 300_000_000, "divine", ((255, 200, 30), (255, 250, 200)), "slug", _from(5)),
+    # Slug Earth contraband
+    Ore("blue_crystal", "Grandma's Blue Crystal", 5_000_000, 15_000_000, "contraband", ((60, 160, 255), (200, 240, 255)), "baggie", ALL),
+
+    # ---------------- The Moon (layers 6-7)
+    Ore("moon_dust", "Moon Dust", 1, 120, "common", ((180, 180, 175), (230, 230, 225)), "chunk", (6,)),
+    Ore("dark_regolith", "Dark Regolith", 1, 250, "common", ((70, 70, 80), (130, 130, 145)), "chunk", (7,)),
+    Ore("helium3", "Helium-3", 4, 150, "common", ((120, 220, 255), (220, 250, 255)), "orb", MOON),
+    Ore("moon_cheese", "Moon Cheese", 30, 900, "common", ((250, 210, 70), (255, 240, 160)), "chunk", MOON),
+    Ore("lunar_titanium", "Lunar Titanium", 80, 2_500, "uncommon", ((150, 160, 180), (230, 235, 245)), "chunk", MOON),
+    Ore("flag_scrap", "Apollo Flag Scrap", 600, 18_000, "rare", ((220, 40, 50), (240, 240, 255)), "chunk", MOON),
+    Ore("selenite", "Selenite", 3_000, 90_000, "epic", ((230, 230, 255), (255, 255, 255)), "crystal", MOON),
+    Ore("lunar_pearl", "Lunar Pearl", 40_000, 1_200_000, "legendary", ((220, 225, 255), (255, 255, 255)), "orb", MOON),
+    Ore("moonstone_prime", "Moonstone Prime", 400_000, 12_000_000, "mythic", ((150, 170, 255), (240, 240, 255)), "gem", (7,)),
+    Ore("moon_rocks", "Moon Rocks (the other kind)", 10_000_000, 400_000_000, "contraband", ((230, 230, 210), (180, 255, 200)), "baggie", MOON),
+
+    # ---------------- Mars (layers 8-9)
+    Ore("red_dust", "Red Dust", 1, 600, "common", ((190, 80, 50), (230, 130, 90)), "chunk", (8,)),
+    Ore("oxide_crust", "Iron Oxide Crust", 1, 1_200, "common", ((150, 60, 40), (210, 110, 70)), "chunk", (9,)),
+    Ore("rust_nugget", "Rust Nugget", 4, 700, "common", ((180, 90, 40), (240, 150, 80)), "chunk", MARS),
+    Ore("martian_ice", "Martian Ice", 25, 4_000, "common", ((170, 230, 255), (240, 250, 255)), "crystal", MARS),
+    Ore("rover_parts", "Abandoned Rover Parts", 150, 20_000, "uncommon", ((200, 200, 200), (255, 220, 120)), "chunk", MARS),
+    Ore("phobos_shard", "Phobos Shard", 1_000, 150_000, "rare", ((120, 100, 110), (220, 160, 140)), "crystal", MARS),
+    Ore("olympus_ruby", "Olympus Ruby", 6_000, 900_000, "epic", ((230, 30, 40), (255, 140, 120)), "gem", MARS),
+    Ore("red_giant_garnet", "Red Giant Garnet", 80_000, 12_000_000, "legendary", ((180, 0, 30), (255, 120, 60)), "gem", MARS),
+    Ore("martian_fossil", "Ancient Martian Fossil", 1_500_000, 200_000_000, "mythic", ((220, 200, 160), (255, 240, 200)), "chunk", (9,)),
+    Ore("k_dust", "Martian K-Dust", 15_000_000, 3_000_000_000, "contraband", ((240, 240, 250), (255, 150, 150)), "pile", MARS),
+
+    # ---------------- Shroomtopia (layers 10-11)
+    Ore("spore_soil", "Spore Soil", 1, 3_000, "common", ((90, 60, 90), (160, 110, 160)), "chunk", (10,)),
+    Ore("mycelium_mat", "Mycelium Mat", 1, 6_000, "common", ((220, 210, 190), (255, 250, 230)), "chunk", (11,)),
+    Ore("glowcap_spores", "Glowcap Spores", 4, 3_500, "common", ((90, 255, 200), (200, 255, 240)), "pile", SHROOM),
+    Ore("funky_fungus", "Funky Fungus", 40, 30_000, "common", ((255, 120, 40), (255, 220, 120)), "shroom", SHROOM),
+    Ore("truffle", "Truffle of Wealth", 300, 250_000, "uncommon", ((90, 60, 40), (200, 160, 100)), "orb", SHROOM),
+    Ore("spore_sapphire", "Spore Sapphire", 2_500, 2_000_000, "rare", ((60, 90, 255), (180, 120, 255)), "gem", SHROOM),
+    Ore("bouncy_cap", "Bouncy Cap", 12_000, 15_000_000, "epic", ((255, 80, 200), (255, 220, 250)), "shroom", SHROOM),
+    Ore("mushroom_kings_cap", "Mushroom King's Cap", 150_000, 120_000_000, "legendary", ((230, 30, 40), (255, 255, 255)), "shroom", SHROOM),
+    Ore("mycelium_heart", "Mycelium Heart", 3_000_000, 2_000_000_000, "celestial", ((140, 255, 160), (255, 200, 255)), "orb", (11,)),
+    Ore("cosmic_shroom", "The Cosmic Shroom", 25_000_000, 25_000_000_000, "contraband", ((170, 80, 255), (120, 255, 230)), "shroom", SHROOM),
+
+    # ---------------- Candy Nebula (layers 12-13)
+    Ore("sugar_sand", "Sugar Sand", 1, 15_000, "common", ((250, 240, 245), (255, 255, 255)), "pile", (12,)),
+    Ore("rock_candy", "Rock Candy Crust", 1, 30_000, "common", ((255, 170, 210), (255, 230, 245)), "crystal", (13,)),
+    Ore("gumdrops", "Gumdrops", 4, 18_000, "common", ((80, 220, 90), (200, 255, 190)), "orb", CANDY),
+    Ore("jawbreaker", "Jawbreaker", 50, 200_000, "common", ((255, 90, 90), (255, 240, 120)), "orb", CANDY),
+    Ore("lollipop_crystal", "Lollipop Crystal", 400, 2_000_000, "uncommon", ((255, 80, 160), (255, 255, 255)), "crystal", CANDY),
+    Ore("taffy_ore", "Cosmic Taffy", 3_000, 20_000_000, "rare", ((120, 220, 255), (255, 180, 230)), "chunk", CANDY),
+    Ore("cotton_cloud", "Cotton Candy Cloud", 15_000, 120_000_000, "epic", ((255, 170, 220), (170, 220, 255)), "orb", CANDY),
+    Ore("gobstopper", "Galactic Gobstopper", 200_000, 1_000_000_000, "legendary", ((140, 60, 255), (255, 220, 80)), "orb", CANDY),
+    Ore("sugar_star", "Sugar Star", 5_000_000, 20_000_000_000, "celestial", ((255, 240, 150), (255, 160, 220)), "star", (13,)),
+    Ore("space_pez", "Space Pez", 40_000_000, 150_000_000_000, "contraband", ((255, 120, 200), (120, 230, 255)), "pill", CANDY),
+
+    # ---------------- The Singularity (layer 14)
+    Ore("void_ash", "Void Ash", 1, 80_000, "common", ((50, 40, 60), (110, 90, 130)), "pile", (14,)),
+    Ore("dark_matter", "Dark Matter", 5, 100_000, "common", ((30, 10, 50), (130, 60, 200)), "orb", (14, 15)),
+    Ore("antimatter", "Antimatter", 60, 1_500_000, "uncommon", ((255, 255, 255), (255, 80, 220)), "orb", (14, 15)),
+    Ore("entropy_crystal", "Entropy Crystal", 800, 20_000_000, "rare", ((80, 0, 160), (0, 255, 220)), "crystal", (14, 15)),
+    Ore("singularity_shard", "Singularity Shard", 10_000, 300_000_000, "epic", ((10, 0, 20), (255, 255, 255)), "gem", (14, 15)),
+    Ore("horizon_opal", "Event Horizon Opal", 500_000, 20_000_000_000, "mythic", ((255, 130, 40), (60, 0, 120)), "orb", (14, 15)),
+    Ore("stardust", "Pure Uncut Stardust", 250_000_000, 2_000_000_000_000, "contraband", ((255, 255, 255), (200, 180, 255)), "pile", (14,)),
+
+    # ---------------- The Nothing (layer 15)
+    Ore("nothing", "Literally Nothing", 1, 160_000, "common", ((20, 20, 25), (60, 60, 70)), "orb", (15,)),
+    Ore("eye_of_void", "Eye of the Void", 20_000_000, 1_000_000_000_000, "divine", ((0, 0, 0), (180, 80, 255)), "orb", (15,)),
+    Ore("last_gram", "The Last Gram in the Universe", 1_000_000_000, 10_000_000_000_000, "contraband", ((255, 255, 255), (255, 215, 0)), "baggie", (15,)),
+]
+ORE_BY_KEY = {o.key: o for o in ORES}
+TIER_ORDER = list(TIERS)
+
+
+@dataclass(frozen=True)
+class Realm:
+    key: str
+    name: str
+    emoji: str
+
+
+REALMS = {
+    "milky": Realm("milky", "The Milky Way", "🌌"),
+    "trippy": Realm("trippy", "The Trippy Dimension", "🍄"),
+    "void": Realm("void", "The Void Realm", "🕳️"),
+}
+
+
+@dataclass(frozen=True)
+class Planet:
+    key: str
+    name: str
+    realm: str
+    emoji: str
+
+
+PLANETS = {
+    "earth": Planet("earth", "Slug Earth", "milky", "🌍"),
+    "moon": Planet("moon", "The Moon", "milky", "🌕"),
+    "mars": Planet("mars", "Mars", "milky", "🔴"),
+    "shroom": Planet("shroom", "Shroomtopia", "trippy", "🍄"),
+    "candy": Planet("candy", "Candy Nebula", "trippy", "🍭"),
+    "singularity": Planet("singularity", "The Singularity", "void", "⚫"),
+    "nothing": Planet("nothing", "The Nothing", "void", "⬛"),
+}
+
+
+@dataclass(frozen=True)
+class Layer:
+    num: int
+    name: str
+    planet: str
+    cost: int             # coins to reach this layer
+    materials: dict       # parts and ores needed too (only for the first layer of a planet)
+    luck: float
+    color: tuple
+    blurb: str
+
+    @property
+    def planet_info(self):
+        return PLANETS[self.planet]
+
+    @property
+    def realm_info(self):
+        return REALMS[self.planet_info.realm]
+
+
+LAYERS = [
+    Layer(1, "Mossy Tunnels", "earth", 0, {}, 1.0, (70, 110, 60), "Damp, mossy and full of slugs. Everyone starts here."),
+    Layer(2, "Crystal Caverns", "earth", 5_000, {}, 1.25, (90, 200, 200), "Glowing crystals light the walls."),
+    Layer(3, "Magma Depths", "earth", 75_000, {}, 1.5, (220, 80, 30), "Hot enough to cook a slug. Rare gems melt out of the rock."),
+    Layer(4, "The Abyss", "earth", 1_000_000, {}, 2.0, (40, 30, 90), "Pitch black. Things in the dark are worth a fortune."),
+    Layer(5, "Slug Core", "earth", 25_000_000, {}, 2.5, (130, 230, 80), "The heart of Slug Earth, home of the Slug King. Grandma hides her stash down here."),
+    Layer(6, "Tranquility Craters", "moon", 30_000_000,
+          {"part:fuel": 3, "part:hull": 2, "part:nav": 1, "ore:sunshard": 1}, 3.0, (190, 190, 200),
+          "One small step for slug. The cheese is real."),
+    Layer(7, "The Dark Side", "moon", 120_000_000, {}, 3.5, (50, 50, 70), "Pink Floyd is playing somewhere. Nobody knows where."),
+    Layer(8, "Red Dust Flats", "mars", 300_000_000,
+          {"part:fuel": 5, "part:hull": 5, "part:o2": 2, "ore:lunar_pearl": 1}, 4.0, (200, 80, 50),
+          "Dusty, red, and full of abandoned rovers. The locals are very calm."),
+    Layer(9, "Olympus Underbelly", "mars", 1_200_000_000, {}, 4.5, (140, 40, 30), "Under the tallest volcano in the system. Ancient things sleep here."),
+    Layer(10, "Spore Forest", "shroom", 3_000_000_000,
+          {"part:warp": 1, "part:o2": 3, "ore:red_giant_garnet": 1, "ore:olympus_ruby": 3}, 5.0, (150, 70, 170),
+          "You've left the Milky Way. The trees are mushrooms. The mushrooms are watching."),
+    Layer(11, "Mycelium Mines", "shroom", 12_000_000_000, {}, 5.5, (220, 200, 170), "Everything is connected, man."),
+    Layer(12, "Gumdrop Belt", "candy", 30_000_000_000,
+          {"part:munchie": 2, "part:fuel": 20, "ore:mushroom_kings_cap": 1}, 6.0, (255, 150, 200),
+          "A nebula made of sugar. Your teeth hurt just landing here."),
+    Layer(13, "Sugar Core", "candy", 120_000_000_000, {}, 6.5, (255, 220, 120), "The sweetest place in the universe. Some of the candy isn't candy."),
+    Layer(14, "Event Horizon", "singularity", 300_000_000_000,
+          {"part:void_engine": 1, "part:warp": 2, "ore:gobstopper": 1}, 7.0, (40, 20, 70),
+          "You've crossed into the Void. Time is weird. Your pickaxe is spaghetti."),
+    Layer(15, "The Nothing", "nothing", 3_000_000_000_000,
+          {"part:void_engine": 2, "ore:singularity_shard": 3}, 8.0, (15, 15, 20),
+          "There is nothing here. Except, rumor says, one last gram."),
+]
+REBIRTH_LAYER = 5         # you can rebirth once you've reached Slug Core
+
+
+@dataclass(frozen=True)
+class Part:
+    key: str
+    name: str
+    price: int
+    materials: dict
+    blurb: str
+
+
+# Spaceship parts, crafted in the Workshop and burned when you travel to a new planet.
+PARTS = [
+    Part("fuel", "Rocket Fuel", 25_000, {"ore:coal": 100, "ore:magmite": 10}, "Coal and magma in a jug. Smells illegal."),
+    Part("hull", "Hull Plating", 50_000, {"bar:iron": 10, "bar:silver": 5}, "Keeps space out."),
+    Part("nav", "Nav Computer", 200_000, {"ore:diamond": 1, "ore:sapphire": 3}, "Points the rocket away from the ground."),
+    Part("o2", "Oxygen Tank", 2_000_000, {"ore:helium3": 60, "ore:lunar_titanium": 5}, "Breathing: highly recommended."),
+    Part("warp", "Warp Core", 500_000_000, {"ore:red_giant_garnet": 1, "ore:phobos_shard": 5, "part:fuel": 10}, "Tears a hole into the next realm."),
+    Part("munchie", "Munchie Shield", 5_000_000_000, {"ore:truffle": 10, "ore:funky_fungus": 60}, "Stops you eating the whole Candy Nebula."),
+    Part("void_engine", "Void Engine", 100_000_000_000, {"ore:gobstopper": 1, "ore:sugar_star": 1, "part:warp": 1}, "Runs on nothing. Literally."),
+]
+PART_BY_KEY = {p.key: p for p in PARTS}
+
+
+@dataclass(frozen=True)
+class Pickaxe:
+    key: str
+    name: str
+    price: int
+    materials: dict       # item key -> qty ("bar:iron", "ore:diamond")
+    luck: float
+    cooldown: float       # seconds between swings
+    rolls: int            # ores rolled per swing
+    color: tuple
+
+
+PICKAXES = [
+    Pickaxe("wood", "Wooden Pickaxe", 0, {}, 1.0, 3.0, 1, (150, 100, 50)),
+    Pickaxe("stone", "Stone Pickaxe", 250, {}, 1.1, 2.7, 1, (130, 130, 130)),
+    Pickaxe("copper", "Copper Pickaxe", 1_500, {"bar:copper": 5}, 1.2, 2.5, 1, (200, 110, 60)),
+    Pickaxe("iron", "Iron Pickaxe", 8_000, {"bar:iron": 10}, 1.35, 2.2, 1, (200, 190, 180)),
+    Pickaxe("gold", "Golden Pickaxe", 40_000, {"bar:gold": 10}, 1.6, 2.0, 2, (240, 190, 40)),
+    Pickaxe("diamond", "Diamond Pickaxe", 250_000, {"ore:diamond": 1, "bar:gold": 20}, 2.0, 1.8, 2, (170, 235, 255)),
+    Pickaxe("obsidian", "Obsidian Pickaxe", 1_500_000, {"ore:obsidian_heart": 1, "bar:iron": 40}, 2.5, 1.6, 3, (90, 30, 120)),
+    Pickaxe("slugsteel", "Slugsteel Pickaxe", 10_000_000, {"ore:slugheart_opal": 1, "bar:silver": 50}, 3.5, 1.4, 3, (130, 230, 80)),
+    Pickaxe("starbreaker", "Starbreaker", 20_000_000, {"ore:sunshard": 2, "bar:gold": 100}, 4.5, 1.2, 4, (255, 240, 160)),
+    Pickaxe("moon_drill", "Moon Drill", 200_000_000, {"ore:lunar_pearl": 1, "ore:selenite": 5}, 5.5, 1.1, 4, (200, 200, 230)),
+    Pickaxe("plasma", "Plasma Pick", 2_000_000_000, {"ore:red_giant_garnet": 1, "ore:olympus_ruby": 5}, 7.0, 1.0, 5, (255, 90, 40)),
+    Pickaxe("shroom_scythe", "Shroom Scythe", 20_000_000_000, {"ore:mushroom_kings_cap": 1, "ore:bouncy_cap": 5}, 8.5, 0.9, 5, (230, 40, 60)),
+    Pickaxe("lollipick", "Lollipick", 200_000_000_000, {"ore:gobstopper": 1, "ore:cotton_cloud": 5}, 10.0, 0.8, 6, (255, 100, 180)),
+    Pickaxe("void_breaker", "Void Breaker", 5_000_000_000_000, {"ore:horizon_opal": 1, "ore:singularity_shard": 10}, 12.0, 0.7, 7, (120, 40, 220)),
+]
+PICKAXE_BY_KEY = {p.key: p for p in PICKAXES}
+
+# smelting: ORE_PER_BAR ores + a coin fee -> 1 bar. Bars sell for more than the ores did.
+ORE_PER_BAR = 5
+BARS = {
+    "copper": ("Copper Bar", 10),
+    "tin": ("Tin Bar", 15),
+    "iron": ("Iron Bar", 30),
+    "silver": ("Silver Bar", 80),
+    "gold": ("Gold Bar", 160),
+}
+def bar_value(bar):
+    return int(ORE_BY_KEY[bar].value * ORE_PER_BAR * 1.4)
+
+
+# Sluglings are hired helpers that mine while you're away.
+SLUGLING_BASE_COST = 2_000
+SLUGLING_COST_GROWTH = 1.6
+SLUGLING_SECONDS_PER_ROLL = 60
+SLUGLING_LUCK = 0.5
+COLLECT_CAP_HOURS = 12
+
+# Lucky Roll: a spinning reel that hands out a small boost.
+LUCKY_ROLL_COOLDOWN = 10 * 60
+
+
+@dataclass(frozen=True)
+class Prize:
+    key: str
+    name: str
+    weight: int
+    kind: str             # luck, haste, rolls, coins
+    amount: float
+    minutes: int
+    color: tuple
+    icon: str             # clover, bolt, coin, pick, slug, star
+
+
+PRIZES = [
+    Prize("pouch", "Coin Pouch", 28, "coins", 1, 0, (240, 190, 40), "coin"),
+    Prize("lucky", "Lucky Hour  x1.5 luck", 28, "luck", 1.5, 10, (90, 210, 90), "clover"),
+    Prize("haste", "Haste  -40% cooldown", 20, "haste", 0.6, 10, (80, 180, 255), "bolt"),
+    Prize("double", "Double Dig  x2 ores", 13, "rolls", 2, 5, (200, 130, 255), "pick"),
+    Prize("surge", "Clover Surge  x3 luck", 8, "luck", 3, 5, (40, 255, 120), "star"),
+    Prize("blessing", "Slug Blessing  x10 luck", 3, "luck", 10, 2, (255, 120, 220), "slug"),
+]
+PRIZE_BY_KEY = {p.key: p for p in PRIZES}
+
+# Rebirth: reset progress for permanent boosts.
+REBIRTH_COST = 50_000_000
+REBIRTH_LUCK = 0.5        # +50% luck per rebirth
+REBIRTH_SELL = 0.25       # +25% sell value per rebirth

@@ -1,0 +1,516 @@
+"""Every picture in the game is drawn here with Pillow, so no image files are needed.
+
+- ore_icon(ore)              -> PNG of an ore (cached on disk)
+- reveal_gif(ore, user_name) -> the special-effect GIF for rare finds
+- reel_gif(result_prize)     -> the Lucky Roll spinning reel, landing on the prize
+- prize_card(prize)          -> still image of the prize (shown after the reel stops)
+- pickaxe_icon(pickaxe)      -> PNG for the shop
+
+To use your own art for an ore, drop a PNG named <ore key>.png into assets/ores/
+(for example assets/ores/sunshard.png) and it's used instead of the drawn one.
+"""
+import colorsys
+import io
+import math
+import os
+import random
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+from .data import TIERS, PRIZES
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CACHE = os.path.join(ROOT, "assets", "cache")
+CUSTOM = os.path.join(ROOT, "assets", "ores")
+os.makedirs(CACHE, exist_ok=True)
+
+_FONTS = {}
+_FONT_FILES = ["impact.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf",
+               "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+
+
+def font(size):
+    if size not in _FONTS:
+        f = None
+        for name in _FONT_FILES:
+            try:
+                f = ImageFont.truetype(name, size)
+                break
+            except OSError:
+                continue
+        _FONTS[size] = f or ImageFont.load_default(size)
+    return _FONTS[size]
+
+
+def _mix(a, b, t):
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def _dark(c, t=0.5):
+    return _mix(c, (0, 0, 0), t)
+
+
+def _light(c, t=0.5):
+    return _mix(c, (255, 255, 255), t)
+
+
+def _png(img):
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------- ore icons
+
+def _draw_chunk(d, S, r, main, hi):
+    cx, cy = S / 2, S * 0.55
+    pts = []
+    n = 9
+    for i in range(n):
+        a = 2 * math.pi * i / n + r.uniform(-0.2, 0.2)
+        rad = S * r.uniform(0.30, 0.40)
+        pts.append((cx + math.cos(a) * rad * 1.15, cy + math.sin(a) * rad * 0.85))
+    rock = _mix((95, 92, 98), main, 0.25)
+    d.polygon(pts, fill=_dark(rock, 0.35))
+    # lit facets toward the top-left
+    for i in range(n):
+        p1, p2 = pts[i], pts[(i + 1) % n]
+        mid = (cx - S * 0.05, cy - S * 0.08)
+        shade = 0.5 + 0.5 * math.cos(math.atan2((p1[1] + p2[1]) / 2 - cy, (p1[0] + p2[0]) / 2 - cx) + 2.3)
+        d.polygon([p1, p2, mid], fill=_mix(_dark(rock, 0.3), _light(rock, 0.25), shade))
+    # ore flecks
+    for _ in range(14):
+        a = r.uniform(0, 2 * math.pi)
+        rad = r.uniform(0, S * 0.26)
+        x, y = cx + math.cos(a) * rad * 1.1, cy + math.sin(a) * rad * 0.75
+        s = r.uniform(S * 0.025, S * 0.06)
+        fl = [(x + math.cos(b) * s * r.uniform(0.6, 1.2), y + math.sin(b) * s * r.uniform(0.6, 1.2))
+              for b in [k * math.pi / 3 for k in range(6)]]
+        d.polygon(fl, fill=main)
+        d.polygon(fl[:3] + [(x, y)], fill=hi)
+
+
+def _crystal(d, base, angle, length, width, main, hi):
+    bx, by = base
+    dx, dy = math.sin(angle), -math.cos(angle)
+    px, py = -dy, dx
+    tipx, tipy = bx + dx * length, by + dy * length
+    shx, shy = bx + dx * length * 0.75, by + dy * length * 0.75
+    L = [(bx - px * width, by - py * width), (shx - px * width, shy - py * width), (tipx, tipy), (bx, by)]
+    R = [(bx + px * width, by + py * width), (shx + px * width, shy + py * width), (tipx, tipy), (bx, by)]
+    d.polygon(L, fill=main)
+    d.polygon(R, fill=_dark(main, 0.35))
+    d.line([(bx, by), (tipx, tipy)], fill=hi, width=max(2, int(width * 0.18)))
+    d.polygon([(shx - px * width, shy - py * width), (tipx, tipy), (shx, shy)], fill=hi)
+
+
+def _draw_crystal(d, S, r, main, hi):
+    base = (S / 2, S * 0.8)
+    d.ellipse([S * 0.22, S * 0.72, S * 0.78, S * 0.88], fill=(60, 55, 65))
+    specs = [(-0.75, 0.45, 0.07), (0.7, 0.42, 0.07), (-0.35, 0.6, 0.09), (0.32, 0.58, 0.09), (0.0, 0.7, 0.11)]
+    for ang, ln, w in specs:
+        _crystal(d, (base[0] + ang * S * 0.08, base[1]), ang * 0.9 + r.uniform(-0.08, 0.08),
+                 S * ln, S * w, _mix(main, hi, r.uniform(0, 0.25)), hi)
+
+
+def _draw_gem(d, S, r, main, hi):
+    cx, top, mid, bot = S / 2, S * 0.25, S * 0.42, S * 0.85
+    w1, w2 = S * 0.2, S * 0.38
+    table = [(cx - w1, top), (cx + w1, top)]
+    girdle = [(cx - w2 + i * (2 * w2 / 6), mid) for i in range(7)]
+    tl = [(cx - w1 + i * (2 * w1 / 3), top) for i in range(4)]
+    d.polygon([girdle[0], tl[0], tl[3], girdle[6], (cx, bot)], fill=main)
+    cols = [_light(main, 0.35), main, _light(main, 0.55), _dark(main, 0.15), _light(main, 0.25), _dark(main, 0.3)]
+    for i in range(6):
+        t = tl[min(3, (i + 1) // 2)]
+        d.polygon([girdle[i], girdle[i + 1], t], fill=cols[i])
+    d.polygon([tl[0], tl[3], (cx + w1 * 0.6, top + (mid - top) * 0.5), (cx - w1 * 0.6, top + (mid - top) * 0.5)],
+              fill=_light(hi, 0.3))
+    pcols = [_dark(main, 0.1), _dark(main, 0.35), _light(main, 0.2), _dark(main, 0.5), main, _dark(main, 0.25)]
+    for i in range(6):
+        d.polygon([girdle[i], girdle[i + 1], (cx, bot)], fill=pcols[i])
+    d.line([girdle[0], girdle[6]], fill=_light(hi, 0.5), width=3)
+
+
+def _draw_orb(img, d, S, r, main, hi):
+    cx, cy, rad = S / 2, S / 2, S * 0.34
+    for i in range(40, 0, -1):
+        t = i / 40
+        c = _mix(hi, _dark(main, 0.4), t)
+        ox, oy = -rad * 0.3 * (1 - t), -rad * 0.3 * (1 - t)
+        d.ellipse([cx - rad * t + ox, cy - rad * t + oy, cx + rad * t + ox, cy + rad * t + oy], fill=c)
+    for k in range(3):
+        a0 = r.uniform(0, 360)
+        rr = rad * (0.5 + 0.15 * k)
+        d.arc([cx - rr, cy - rr, cx + rr, cy + rr], a0, a0 + 120, fill=_light(hi, 0.4), width=max(2, int(S * 0.015)))
+    d.ellipse([cx - rad * 0.55, cy - rad * 0.65, cx - rad * 0.15, cy - rad * 0.35], fill=(255, 255, 255))
+
+
+def _star_pts(cx, cy, outer, inner, n=8, rot=0.0):
+    pts = []
+    for i in range(n * 2):
+        a = rot + math.pi * i / n - math.pi / 2
+        rr = outer if i % 2 == 0 else inner
+        pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
+    return pts
+
+
+def _draw_star(d, S, r, main, hi):
+    cx, cy = S / 2, S / 2
+    d.polygon(_star_pts(cx, cy, S * 0.42, S * 0.17, 8), fill=_dark(main, 0.15))
+    d.polygon(_star_pts(cx, cy, S * 0.32, S * 0.14, 8, math.pi / 8), fill=main)
+    d.polygon(_star_pts(cx, cy, S * 0.2, S * 0.1, 4), fill=hi)
+    d.ellipse([cx - S * 0.07, cy - S * 0.07, cx + S * 0.07, cy + S * 0.07], fill=(255, 255, 255))
+
+
+def _draw_crown(d, S, r, main, hi):
+    l, rgt, top, bot = S * 0.18, S * 0.82, S * 0.25, S * 0.72
+    pts = [(l, bot), (l, S * 0.38), (S * 0.32, S * 0.52), (S * 0.5, top), (S * 0.68, S * 0.52), (rgt, S * 0.38), (rgt, bot)]
+    d.polygon(pts, fill=main)
+    d.polygon([(l, bot), (l, S * 0.38), (S * 0.32, S * 0.52), (S * 0.5, top), (S * 0.5, bot)], fill=_light(main, 0.2))
+    d.rectangle([l, bot - S * 0.1, rgt, bot], fill=_dark(main, 0.2))
+    for x, y in [(l, S * 0.38), (S * 0.5, top), (rgt, S * 0.38)]:
+        d.ellipse([x - S * 0.045, y - S * 0.045, x + S * 0.045, y + S * 0.045], fill=hi)
+    gems = [(150, 40, 255), (230, 30, 60), (40, 200, 120)]
+    for i, x in enumerate([S * 0.32, S * 0.5, S * 0.68]):
+        y = bot - S * 0.05
+        d.ellipse([x - S * 0.04, y - S * 0.035, x + S * 0.04, y + S * 0.035], fill=gems[i])
+    # a little slime drip so it's the Slug King's
+    d.ellipse([S * 0.6, bot - S * 0.02, S * 0.66, bot + S * 0.08], fill=(140, 230, 90))
+
+
+def _draw_slug(d, S, r, main, hi):
+    body = [S * 0.12, S * 0.5, S * 0.8, S * 0.78]
+    d.ellipse(body, fill=_dark(main, 0.15))
+    d.ellipse([S * 0.15, S * 0.48, S * 0.75, S * 0.68], fill=main)
+    d.ellipse([S * 0.55, S * 0.38, S * 0.88, S * 0.72], fill=main)
+    for ex, ey in [(S * 0.68, S * 0.18), (S * 0.82, S * 0.2)]:
+        d.line([(S * 0.72, S * 0.45), (ex, ey)], fill=_dark(main, 0.1), width=int(S * 0.035))
+        d.ellipse([ex - S * 0.04, ey - S * 0.04, ex + S * 0.04, ey + S * 0.04], fill=hi)
+        d.ellipse([ex - S * 0.015, ey - S * 0.01, ex + S * 0.02, ey + S * 0.025], fill=(30, 20, 10))
+    d.arc([S * 0.7, S * 0.5, S * 0.82, S * 0.62], 20, 160, fill=(80, 50, 10), width=int(S * 0.02))
+    d.ellipse([S * 0.25, S * 0.52, S * 0.45, S * 0.58], fill=_light(hi, 0.5))
+
+
+def _draw_baggie(d, S, r, main, hi):
+    """A little zip baggie with crystals inside. Strictly for comedy."""
+    l, rt, top, bot = S * 0.24, S * 0.76, S * 0.2, S * 0.84
+    d.rounded_rectangle([l, top, rt, bot], radius=S * 0.04, fill=(235, 240, 245), outline=(200, 205, 215), width=4)
+    d.rectangle([l, top + S * 0.04, rt, top + S * 0.075], fill=(220, 40, 50))   # red zip strip
+    for _ in range(9):
+        x = r.uniform(l + S * 0.08, rt - S * 0.08)
+        y = r.uniform(S * 0.5, bot - S * 0.08)
+        _crystal(d, (x, y + S * 0.05), r.uniform(-0.6, 0.6), S * r.uniform(0.12, 0.2), S * 0.035, main, hi)
+    d.polygon([(l + S * 0.04, top + S * 0.12), (l + S * 0.1, top + S * 0.12), (l + S * 0.06, bot - S * 0.1),
+               (l + S * 0.03, bot - S * 0.1)], fill=(255, 255, 255))
+
+
+def _draw_pile(d, S, r, main, hi, card=False):
+    cx, base = S / 2, S * 0.78
+    d.ellipse([S * 0.12, base - S * 0.06, S * 0.88, base + S * 0.06], fill=_dark(main, 0.45))
+    d.pieslice([S * 0.14, S * 0.38, S * 0.86, base + S * 0.32], 180, 360, fill=main)
+    d.pieslice([S * 0.22, S * 0.42, S * 0.62, base + S * 0.1], 190, 300, fill=_light(main, 0.3))
+    for _ in range(60):
+        a = r.uniform(math.pi, 2 * math.pi)
+        rr = r.uniform(0, 1) ** 0.5
+        x = cx + math.cos(a) * rr * S * 0.34
+        y = base + math.sin(a) * rr * S * 0.36
+        s = r.uniform(2, 6)
+        d.ellipse([x - s, y - s, x + s, y + s], fill=hi if r.random() < 0.6 else (255, 255, 255))
+    if not card:
+        return
+    # a credit card for the lols
+    d.rounded_rectangle([S * 0.6, S * 0.72, S * 0.9, S * 0.86], radius=8, fill=(40, 90, 200))
+    d.rectangle([S * 0.6, S * 0.75, S * 0.9, S * 0.775], fill=(20, 20, 30))
+
+
+def _draw_shroom(d, S, r, main, hi):
+    d.rounded_rectangle([S * 0.4, S * 0.45, S * 0.6, S * 0.85], radius=S * 0.06, fill=(245, 235, 215))
+    d.rectangle([S * 0.43, S * 0.45, S * 0.48, S * 0.82], fill=(255, 250, 240))
+    d.pieslice([S * 0.12, S * 0.16, S * 0.88, S * 0.76], 180, 360, fill=main)
+    d.pieslice([S * 0.2, S * 0.2, S * 0.6, S * 0.6], 190, 260, fill=_light(main, 0.25))
+    for _ in range(7):
+        a = r.uniform(math.pi * 1.1, math.pi * 1.9)
+        rr = r.uniform(0.3, 0.8)
+        x, y = S / 2 + math.cos(a) * rr * S * 0.34, S * 0.46 + math.sin(a) * rr * S * 0.28
+        s = S * r.uniform(0.03, 0.055)
+        d.ellipse([x - s, y - s, x + s, y + s], fill=hi)
+    # derpy face
+    d.ellipse([S * 0.44, S * 0.56, S * 0.48, S * 0.61], fill=(30, 20, 20))
+    d.ellipse([S * 0.52, S * 0.56, S * 0.56, S * 0.61], fill=(30, 20, 20))
+    d.arc([S * 0.45, S * 0.6, S * 0.55, S * 0.68], 20, 160, fill=(30, 20, 20), width=4)
+
+
+def _draw_pill(d, S, r, main, hi):
+    for i, (x, y, a) in enumerate([(0.35, 0.4, -30), (0.62, 0.55, 20), (0.42, 0.7, 70)]):
+        pill = Image.new("RGBA", (int(S * 0.5), int(S * 0.22)), (0, 0, 0, 0))
+        pd = ImageDraw.Draw(pill)
+        w, h = pill.size
+        pd.rounded_rectangle([0, 0, w - 1, h - 1], radius=h // 2, fill=hi if i % 2 else main)
+        pd.rounded_rectangle([w // 2, 0, w - 1, h - 1], radius=h // 2, fill=(255, 255, 255))
+        pd.rectangle([w // 2, 0, w // 2 + h // 2, h - 1], fill=(255, 255, 255))
+        pd.ellipse([w * 0.1, h * 0.2, w * 0.3, h * 0.45], fill=(255, 255, 255))
+        pill = pill.rotate(a, expand=True, resample=Image.BICUBIC)
+        d._image.paste(pill, (int(S * x - pill.width / 2), int(S * y - pill.height / 2)), pill)
+
+
+def ore_image(ore, size=160):
+    """Returns an RGBA image of the ore."""
+    custom = os.path.join(CUSTOM, ore.key + ".png")
+    if os.path.exists(custom):
+        return Image.open(custom).convert("RGBA").resize((size, size), Image.LANCZOS)
+    S = 512
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    r = random.Random(ore.key)
+    main, hi = ore.colors
+    if ore.shape == "orb":
+        _draw_orb(img, d, S, r, main, hi)
+    elif ore.shape == "pile":
+        _draw_pile(d, S, r, main, hi, card=ore.tier == "contraband")
+    else:
+        {"chunk": _draw_chunk, "crystal": _draw_crystal, "gem": _draw_gem, "star": _draw_star,
+         "crown": _draw_crown, "slug": _draw_slug, "baggie": _draw_baggie, "pile": _draw_pile,
+         "shroom": _draw_shroom, "pill": _draw_pill}[ore.shape](d, S, r, main, hi)
+    effect = ore.tier_info.effect
+    if effect >= 1:
+        glow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        mask = img.split()[3].filter(ImageFilter.GaussianBlur(18))
+        glow.paste(Image.new("RGBA", (S, S), hi + (255,)), (0, 0), mask)
+        img = Image.alpha_composite(glow, img)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def ore_icon(ore):
+    """PNG bytes of the ore icon, cached in assets/cache."""
+    path = os.path.join(CACHE, f"ore_{ore.key}.png")
+    custom = os.path.join(CUSTOM, ore.key + ".png")
+    if not os.path.exists(path) or (os.path.exists(custom) and os.path.getmtime(custom) > os.path.getmtime(path)):
+        ore_image(ore).save(path)
+    with open(path, "rb") as f:
+        return f.read()
+
+
+# ---------------------------------------------------------------- reveal GIF
+
+def _outlined(d, xy, text, size, fill, anchor="mm", stroke=4):
+    d.text(xy, text, font=font(size), fill=fill, anchor=anchor, stroke_width=stroke, stroke_fill=(0, 0, 0))
+
+
+def _fit(text, max_w, size):
+    while size > 12 and font(size).getlength(text) > max_w:
+        size -= 2
+    return size
+
+
+def reveal_gif(ore, user_name, frames=None):
+    """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly."""
+    tier = ore.tier_info
+    W, H = 480, 330
+    N = frames or (24 if tier.effect <= 1 else 32)
+    color = tier.color
+    main, hi = ore.colors
+    rnd = random.Random(ore.key + user_name)
+
+    # static background: dark radial gradient tinted with the ore colour
+    bg = Image.new("RGB", (W, H), (0, 0, 0))
+    bd = ImageDraw.Draw(bg)
+    for i in range(30, 0, -1):
+        t = i / 30
+        c = _mix(_dark(main, 0.55), (8, 6, 12), t)
+        bd.ellipse([W / 2 - W * 0.75 * t, H * 0.48 - H * 1.1 * t, W / 2 + W * 0.75 * t, H * 0.48 + H * 1.1 * t], fill=c)
+
+    icon = ore_image(ore, 150)
+    rays = 12 if tier.effect >= 2 else 8
+    particles = [(rnd.uniform(0, 2 * math.pi), rnd.uniform(0, 1), rnd.uniform(2, 5), rnd.random()) for _ in range(40 if tier.effect >= 2 else 18)]
+    title = f"{tier.name.upper()} FIND!" if tier.effect < 4 else "DIVINE FIND!!"
+    if tier.effect >= 3:
+        title = ("ULTRA RARE " if tier.effect == 3 else "") + title
+    siren = tier.effect >= 5
+    if siren:
+        title = "!! CONTRABAND !!"
+    who = f"{user_name.upper()} DUG UP"
+    name = ore.name.upper()
+    chance = f"1 in {ore.chance:,}"
+    cx, cy = W / 2, H * 0.42
+
+    out = []
+    for f in range(N):
+        t = f / N
+        img = bg.copy()
+        # rotating light rays
+        layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        ld = ImageDraw.Draw(layer)
+        rot = 2 * math.pi * t / rays
+        for k in range(rays):
+            a = rot + 2 * math.pi * k / rays
+            spread = math.pi / rays * 0.55
+            if siren:
+                rc = (255, 40, 40) if (k + (f // 4)) % 2 else (40, 80, 255)
+            elif tier.effect >= 4:
+                rc = tuple(int(v * 255) for v in colorsys.hsv_to_rgb((k / rays + t) % 1, 0.6, 1))
+            else:
+                rc = hi if k % 2 else color
+            ld.polygon([(cx, cy), (cx + math.cos(a - spread) * 600, cy + math.sin(a - spread) * 600),
+                        (cx + math.cos(a + spread) * 600, cy + math.sin(a + spread) * 600)], fill=rc + (70,))
+        # pulsing glow
+        pulse = 0.5 + 0.5 * math.sin(2 * math.pi * t)
+        gr = 70 + 15 * pulse
+        ld.ellipse([cx - gr, cy - gr, cx + gr, cy + gr], fill=hi + (110,))
+        layer = layer.filter(ImageFilter.GaussianBlur(4))
+        img.paste(layer, (0, 0), layer)
+        d = ImageDraw.Draw(img)
+        # expanding shockwave rings for mythic and up
+        if tier.effect >= 3:
+            for k in range(2):
+                p = (t + k / 2) % 1
+                rr = 40 + p * 260
+                d.ellipse([cx - rr, cy - rr * 0.8, cx + rr, cy + rr * 0.8], outline=_mix(hi, (0, 0, 0), p), width=3)
+        # sparkles flying outward
+        for ang, off, spd, tw in particles:
+            p = (off + t) % 1
+            dist = 50 + p * 230
+            x, y = cx + math.cos(ang) * dist, cy + math.sin(ang) * dist * 0.75
+            s = spd * (1 - p) + 1
+            col = _light(hi, 0.4) if (f + int(tw * 10)) % 3 else (255, 255, 255)
+            d.polygon([(x, y - s * 2), (x + s * 0.6, y), (x, y + s * 2), (x - s * 0.6, y)], fill=col)
+            d.polygon([(x - s * 2, y), (x, y + s * 0.6), (x + s * 2, y), (x, y - s * 0.6)], fill=col)
+        # bobbing, pulsing ore
+        sc = 1 + 0.07 * math.sin(2 * math.pi * t)
+        sz = int(150 * sc)
+        ic = icon.resize((sz, sz), Image.LANCZOS)
+        bob = int(4 * math.sin(2 * math.pi * t))
+        img.paste(ic, (int(cx - sz / 2), int(cy - sz / 2 + bob)), ic)
+        # text
+        if siren:
+            tcol = (255, 70, 70) if (f // 4) % 2 else (90, 140, 255)
+            # police light bar
+            for side, col in ((0, (255, 30, 30)), (1, (30, 70, 255))):
+                on = ((f // 4) + side) % 2 == 0
+                x0 = 8 if side == 0 else W - 58
+                d.rounded_rectangle([x0, 8, x0 + 50, 40], radius=8, fill=col if on else _dark(col, 0.7))
+        elif tier.effect >= 4:
+            tcol = tuple(int(v * 255) for v in colorsys.hsv_to_rgb(t, 0.5, 1))
+        else:
+            tcol = _light(color, 0.15)
+        _outlined(d, (W / 2, 26), title, _fit(title, W - (130 if siren else 20), 34), tcol)
+        _outlined(d, (W / 2, H - 76), who, _fit(who, W - 20, 22), (255, 255, 255), stroke=3)
+        _outlined(d, (W / 2, H - 46), name, _fit(name, W - 20, 32), _light(hi, 0.2))
+        _outlined(d, (W / 2, H - 15), chance, 18, (255, 255, 255), stroke=3)
+        out.append(img)
+
+    buf = io.BytesIO()
+    out[0].save(buf, "GIF", save_all=True, append_images=out[1:], duration=60, loop=0, optimize=True)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------- lucky roll reel
+
+def _prize_icon(d, kind, box, col):
+    x0, y0, x1, y1 = box
+    cx, cy, s = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2
+    white = (255, 255, 255)
+    if kind == "coin":
+        d.ellipse([cx - s * .7, cy - s * .7, cx + s * .7, cy + s * .7], fill=(255, 200, 40), outline=(160, 110, 0), width=4)
+        d.ellipse([cx - s * .45, cy - s * .45, cx + s * .45, cy + s * .45], outline=(200, 140, 0), width=3)
+        d.text((cx, cy), "C", font=font(int(s * .8)), fill=(160, 110, 0), anchor="mm")
+    elif kind == "clover":
+        g = (60, 200, 80)
+        for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+            d.ellipse([cx + dx * s * .3 - s * .3, cy + dy * s * .3 - s * .3, cx + dx * s * .3 + s * .3, cy + dy * s * .3 + s * .3], fill=g)
+        d.line([(cx, cy), (cx + s * .3, cy + s * .8)], fill=(30, 120, 40), width=5)
+    elif kind == "bolt":
+        pts = [(cx + s * .15, cy - s * .8), (cx - s * .45, cy + s * .1), (cx - s * .02, cy + s * .1),
+               (cx - s * .2, cy + s * .8), (cx + s * .45, cy - s * .15), (cx + s * .02, cy - s * .15)]
+        d.polygon(pts, fill=(255, 230, 60), outline=(150, 110, 0))
+    elif kind == "pick":
+        _pickaxe(d, cx, cy, s * 1.6, (190, 140, 255))
+        d.text((cx + s * .5, cy + s * .55), "x2", font=font(int(s * .5)), fill=white, anchor="mm", stroke_width=2, stroke_fill=(0, 0, 0))
+    elif kind == "star":
+        d.polygon(_star_pts(cx, cy, s * .8, s * .35, 5), fill=(80, 255, 140), outline=(20, 120, 50))
+    elif kind == "slug":
+        sub = Image.new("RGBA", (200, 200), (0, 0, 0, 0))
+        _draw_slug(ImageDraw.Draw(sub), 200, None, (255, 140, 210), (255, 230, 250))
+        return sub.resize((int(s * 1.8), int(s * 1.8)), Image.LANCZOS)
+    return None
+
+
+def _pickaxe(d, cx, cy, size, head):
+    s = size / 2
+    d.line([(cx - s * .6, cy + s * .6), (cx + s * .35, cy - s * .35)], fill=(140, 90, 40), width=max(3, int(size * .08)))
+    d.arc([cx - s * .55, cy - s * .95, cx + s * .95, cy + s * .55], 200, 340, fill=head, width=max(4, int(size * .14)))
+
+
+def _cell(prize, size=96):
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([2, 2, size - 3, size - 3], radius=14, fill=_dark(prize.color, 0.55), outline=prize.color, width=4)
+    pad = size * 0.2
+    sub = _prize_icon(d, prize.icon, (pad, pad, size - pad, size - pad), prize.color)
+    if sub is not None:
+        img.paste(sub, (int(size / 2 - sub.width / 2), int(size / 2 - sub.height / 2)), sub)
+    return img
+
+
+def reel_gif(result):
+    """CS-case style reel that decelerates and stops on `result`."""
+    W, H, C, GAP = 480, 170, 96, 8
+    step = C + GAP
+    r = random.Random()
+    weights = [p.weight for p in PRIZES]
+    strip = r.choices(PRIZES, weights=weights, k=34)
+    land = 30
+    strip[land] = result
+    cells = {p.key: _cell(p, C) for p in PRIZES}
+    target = land * step + C / 2 - W / 2 + r.uniform(-C * 0.35, C * 0.35)
+    final = land * step + C / 2 - W / 2
+    N = 34
+    frames, durs = [], []
+    for f in range(N + 1):
+        t = f / N
+        e = 1 - (1 - t) ** 3
+        off = target * e if f < N else final
+        img = Image.new("RGB", (W, H), (22, 20, 30))
+        d = ImageDraw.Draw(img)
+        first = int(off // step)
+        for i in range(max(0, first), min(len(strip), first + W // step + 2)):
+            x = int(i * step - off)
+            c = cells[strip[i].key]
+            img.paste(c, (x, (H - C) // 2 - 10), c)
+        if f == N:
+            d.rounded_rectangle([W / 2 - C / 2 - 6, (H - C) / 2 - 16, W / 2 + C / 2 + 6, (H + C) / 2 - 4],
+                                radius=16, outline=(255, 255, 255), width=4)
+        d.polygon([(W / 2 - 10, 0), (W / 2 + 10, 0), (W / 2, 16)], fill=(255, 215, 60))
+        d.polygon([(W / 2 - 10, H - 22), (W / 2 + 10, H - 22), (W / 2, H - 38)], fill=(255, 215, 60))
+        label = result.name.split("  ")[0] if f == N else "LUCKY ROLL..."
+        _outlined(d, (W / 2, H - 11), label, 18, result.color if f == N else (255, 255, 255), stroke=3)
+        frames.append(img)
+        durs.append(40 if f < N else 3000)
+    buf = io.BytesIO()
+    # no loop extension: plays once and stays on the result
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=durs, optimize=True)
+    return buf.getvalue()
+
+
+def prize_card(prize):
+    W, H = 480, 170
+    img = Image.new("RGB", (W, H), (22, 20, 30))
+    d = ImageDraw.Draw(img)
+    c = _cell(prize, 120)
+    img.paste(c, (30, 25), c)
+    title, _, desc = prize.name.partition("  ")
+    _outlined(d, (170, 70), title.upper(), _fit(title.upper(), 290, 34), prize.color, anchor="lm")
+    if desc:
+        _outlined(d, (170, 112), desc, 22, (255, 255, 255), anchor="lm", stroke=3)
+    return _png(img)
+
+
+def pickaxe_icon(pick):
+    path = os.path.join(CACHE, f"pick_{pick.key}.png")
+    if not os.path.exists(path):
+        S = 320
+        img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        _pickaxe(ImageDraw.Draw(img), S / 2, S / 2, S * 0.8, pick.color)
+        img.resize((128, 128), Image.LANCZOS).save(path)
+    with open(path, "rb") as f:
+        return f.read()
