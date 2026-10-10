@@ -1,5 +1,6 @@
 """Game rules, kept separate from Discord so they're easy to test and tweak."""
 import collections
+import functools
 import math
 import random
 import time
@@ -9,6 +10,15 @@ from . import data
 from .data import ORE_BY_KEY, PICKAXE_BY_KEY, PICKAXES, LAYERS, PRIZES, PART_BY_KEY, PARTS
 
 rng = random.SystemRandom()
+
+
+def atomic(fn):
+    """Runs a game action as one transaction: it fully happens or not at all."""
+    @functools.wraps(fn)
+    def wrapper(db, *args, **kwargs):
+        with db.tx():
+            return fn(db, *args, **kwargs)
+    return wrapper
 
 
 def ores_for_layer(layer):
@@ -86,6 +96,7 @@ class SwingResult:
     luck: Luck
 
 
+@atomic
 def record_finds(db, uid, ores):
     counts = {}
     for o in ores:
@@ -106,6 +117,7 @@ def record_finds(db, uid, ores):
     return best
 
 
+@atomic
 def swing(db, uid):
     user = db.user(uid)
     luck = luck_for(db, user)
@@ -114,6 +126,7 @@ def swing(db, uid):
     return SwingResult(ores, best, luck)
 
 
+@atomic
 def sell_all(db, uid, keep_rare=True):
     """Sells ores. Epic+ ores and bars are kept unless keep_rare is False."""
     user = db.user(uid)
@@ -197,6 +210,7 @@ def pay(db, uid, coins, materials):
         db.add_item(uid, item, -qty)
 
 
+@atomic
 def craft_part(db, uid, key):
     part = PART_BY_KEY[key]
     missing = missing_for(db, uid, part.price, part.materials)
@@ -207,6 +221,7 @@ def craft_part(db, uid, key):
     return True, f"You built **{part.name}**. You have {db.qty(uid, 'part:' + key)} now."
 
 
+@atomic
 def buy_pickaxe(db, uid):
     user = db.user(uid)
     nxt = next_pickaxe(user)
@@ -232,6 +247,7 @@ def is_new_realm(layer):
     return layer.num > 1 and LAYERS[layer.num - 2].realm_info.key != layer.realm_info.key
 
 
+@atomic
 def unlock_next(db, uid):
     """Dig, launch or warp to the next locked layer, paying coins and materials."""
     user = db.user(uid)
@@ -253,6 +269,7 @@ def unlock_next(db, uid):
     return True, f"{head} {nxt.blurb}"
 
 
+@atomic
 def travel(db, uid, num):
     user = db.user(uid)
     if not 1 <= num <= user["max_layer"]:
@@ -261,6 +278,7 @@ def travel(db, uid, num):
     return True, f"You travelled to **{layer_label(LAYERS[num - 1])}**."
 
 
+@atomic
 def descend(db, uid):
     user = db.user(uid)
     if user["layer"] < user["max_layer"]:
@@ -268,6 +286,7 @@ def descend(db, uid):
     return unlock_next(db, uid)
 
 
+@atomic
 def ascend(db, uid):
     user = db.user(uid)
     if user["layer"] <= 1:
@@ -275,6 +294,7 @@ def ascend(db, uid):
     return travel(db, uid, user["layer"] - 1)
 
 
+@atomic
 def smelt_all(db, uid):
     user = db.user(uid)
     made = {}
@@ -300,6 +320,7 @@ def slugling_cost(owned):
     return int(data.SLUGLING_BASE_COST * data.SLUGLING_COST_GROWTH ** owned)
 
 
+@atomic
 def hire_slugling(db, uid):
     user = db.user(uid)
     collect_sluglings(db, uid)   # bank what the current crew dug first
@@ -311,6 +332,7 @@ def hire_slugling(db, uid):
     return True, f"You hired slugling #{user['sluglings'] + 1}! It digs 1 ore a minute, even while you're offline."
 
 
+@atomic
 def collect_sluglings(db, uid):
     user = db.user(uid)
     now = time.time()
@@ -334,6 +356,7 @@ def pick_prize():
     return rng.choices(PRIZES, weights=[p.weight for p in PRIZES])[0]
 
 
+@atomic
 def apply_prize(db, uid, prize):
     user = db.user(uid)
     db.set(uid, last_roll=time.time())
@@ -349,6 +372,7 @@ def can_rebirth(user):
     return user["max_layer"] >= data.REBIRTH_LAYER and user["coins"] >= data.REBIRTH_COST
 
 
+@atomic
 def rebirth(db, uid):
     user = db.user(uid)
     if not can_rebirth(user):

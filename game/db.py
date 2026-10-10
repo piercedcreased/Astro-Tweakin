@@ -1,6 +1,28 @@
-"""Tiny SQLite layer. One file (astro_tweakin.db) next to the bot."""
+"""SQLite layer. One file (astro_tweakin.db) next to the bot.
+
+Data-safety rules:
+- Every game action runs inside one transaction (db.tx()), so a crash or error halfway
+  through rolls the whole action back instead of leaving half a purchase.
+- Coins and item counts can never go below zero: a write that would do that raises
+  NotEnough and the action is rolled back.
+- synchronous=FULL + WAL: a finished action is on disk even if the PC loses power.
+- Backups: see game/backup.py.
+"""
+import contextlib
+import logging
 import sqlite3
+import threading
 import time
+
+log = logging.getLogger("astro-tweakin.db")
+
+
+class NotEnough(Exception):
+    """A write would have made coins or an item go negative."""
+
+
+class CorruptDatabase(Exception):
+    pass
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -53,24 +75,86 @@ CREATE TABLE IF NOT EXISTS finds (
     ore TEXT NOT NULL,
     at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
+
+# Columns added in later versions get listed here, so old save files are upgraded in place
+# (never wiped) when the bot starts. Format: (table, column, definition)
+MIGRATIONS = [
+    # ("users", "favorite_ore", "TEXT"),
+]
 
 
 class DB:
     def __init__(self, path="astro_tweakin.db"):
-        self.conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self.path = path
+        self.conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+        self._depth = 0
+        self.check_integrity()
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def check_integrity(self):
+        try:
+            result = self.conn.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.DatabaseError as e:
+            result = str(e)
+        if result != "ok":
+            raise CorruptDatabase(
+                f"The save file {self.path} is damaged ({result}). The bot will not start so nothing gets "
+                f"overwritten. Run restore_backup.bat to restore the latest backup.")
+
+    def _migrate(self):
+        for table, column, definition in MIGRATIONS:
+            cols = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                log.info("Upgrading save file: adding %s.%s", table, column)
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @contextlib.contextmanager
+    def tx(self):
+        """All-or-nothing block. Nested calls join the outer transaction."""
+        with self._lock:
+            outer = self._depth == 0
+            if outer:
+                self.conn.execute("BEGIN IMMEDIATE")
+            self._depth += 1
+            try:
+                yield self
+            except BaseException:
+                self._depth -= 1
+                if outer:
+                    self.conn.execute("ROLLBACK")
+                raise
+            else:
+                self._depth -= 1
+                if outer:
+                    self.conn.execute("COMMIT")
+
+    def close(self):
+        with self._lock:
+            with contextlib.suppress(Exception):
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            self.conn.close()
 
     def q(self, sql, *args):
-        return self.conn.execute(sql, args).fetchall()
+        with self._lock:
+            return self.conn.execute(sql, args).fetchall()
 
     def one(self, sql, *args):
-        return self.conn.execute(sql, args).fetchone()
+        with self._lock:
+            return self.conn.execute(sql, args).fetchone()
 
     def run(self, sql, *args):
-        self.conn.execute(sql, args)
+        with self._lock:
+            return self.conn.execute(sql, args)
 
     # users
     def user(self, uid, name=None):
@@ -87,7 +171,9 @@ class DB:
         self.run(f"UPDATE users SET {cols} WHERE id=?", *fields.values(), uid)
 
     def add_coins(self, uid, amount):
-        self.run("UPDATE users SET coins = coins + ? WHERE id=?", amount, uid)
+        cur = self.run("UPDATE users SET coins = coins + ? WHERE id=? AND coins + ? >= 0", amount, uid, amount)
+        if cur.rowcount != 1:
+            raise NotEnough(f"user {uid} can't afford {-amount} coins")
 
     # items: "ore:iron", "bar:gold"
     def items(self, uid, prefix=""):
@@ -99,6 +185,12 @@ class DB:
         return row["qty"] if row else 0
 
     def add_item(self, uid, item, qty):
+        if qty < 0:
+            cur = self.run("UPDATE items SET qty = qty + ? WHERE user_id=? AND item=? AND qty + ? >= 0",
+                           qty, uid, item, qty)
+            if cur.rowcount != 1:
+                raise NotEnough(f"user {uid} doesn't have {-qty}x {item}")
+            return
         self.run(
             "INSERT INTO items (user_id, item, qty) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id, item) DO UPDATE SET qty = qty + excluded.qty",

@@ -2,6 +2,7 @@
 import asyncio
 import collections
 import io
+import logging
 import time
 
 import discord
@@ -9,8 +10,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from game import data, engine, images
+from game.db import NotEnough
 from game.data import LAYERS, ORE_BY_KEY, PARTS, PART_BY_KEY, PICKAXE_BY_KEY, PLANETS, REALMS, TIERS, TIER_ORDER
 from game.engine import fmt_chance, fmt_time
+
+log = logging.getLogger("astro-tweakin.game")
 
 TIER_EMOJI = {"common": "⚪", "uncommon": "🟢", "rare": "🔵", "epic": "🟣", "legendary": "🟡",
               "mythic": "🔴", "celestial": "💠", "divine": "🌟", "contraband": "🚨"}
@@ -234,13 +238,31 @@ class Game(commands.Cog):
             return
         self.db.user(uid, interaction.user.display_name)
         async with self.locks[uid]:
-            if action.startswith("mk_") and action[3:] in PART_BY_KEY:
-                ok, msg = engine.craft_part(self.db, uid, action[3:])
-                await self.show(interaction, self.workshop_panel(uid, note=("✅ " if ok else "❌ ") + msg))
-                return
-            fn = getattr(self, "do_" + action, None)
-            if fn:
-                await fn(interaction, uid)
+            try:
+                await self.dispatch_action(interaction, action, uid)
+            except NotEnough:
+                await self.oops(interaction, "You don't have enough for that anymore. Nothing was taken.")
+            except Exception:
+                log.exception("Button %s failed for %s", action, uid)
+                await self.oops(interaction, "Something went wrong. Your progress is safe, nothing was changed.")
+
+    async def oops(self, interaction, text):
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                await interaction.response.send_message(text, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+    async def dispatch_action(self, interaction, action, uid):
+        if action.startswith("mk_") and action[3:] in PART_BY_KEY:
+            ok, msg = engine.craft_part(self.db, uid, action[3:])
+            await self.show(interaction, self.workshop_panel(uid, note=("✅ " if ok else "❌ ") + msg))
+            return
+        fn = getattr(self, "do_" + action, None)
+        if fn:
+            await fn(interaction, uid)
 
     async def show(self, interaction, panel):
         e, files, v = panel

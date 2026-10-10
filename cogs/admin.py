@@ -5,7 +5,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from game import images
+import asyncio
+
+from game import backup, images
 from game.data import ORES, ORE_BY_KEY
 from cogs.game import shout_line
 
@@ -48,6 +50,14 @@ class Admin(commands.Cog):
         self.db.user(member.id, member.display_name)
         self.db.add_coins(member.id, coins)
         await interaction.response.send_message(f"Gave {member.mention} {coins:,} coins.", ephemeral=True)
+
+    @group.command(name="backup", description="Save a backup of all player data right now")
+    @admin_only
+    async def backup_now(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        path = await asyncio.to_thread(backup.make_backup, self.db, "manual")
+        n = len(backup.list_backups())
+        await interaction.followup.send(f"Backup saved: `{path}` ({n} backups kept).", ephemeral=True)
 
     @group.command(name="preview", description="Show what a rare-find animation looks like (doesn't give the ore)")
     @admin_only

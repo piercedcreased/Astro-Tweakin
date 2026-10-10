@@ -53,6 +53,18 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 3. Write the notes in a file under `updates/` (the first `# ` line is the title).
 4. Run `post_update.bat updates\0.1.0.md`. Add `--dry-run` to preview without posting.
 
+## Keeping player data safe
+
+Everything is saved in `astro_tweakin.db` next to the bot. Here's how it's protected:
+
+- **All-or-nothing saves.** Every button press is saved as one unit. A crash, error or power cut mid-action rolls it back instead of half-applying it (no paying for a pickaxe you didn't get).
+- **No negatives or dupes.** Coins and items can't go below zero, and double-clicking can't run the same action twice at once.
+- **Written to disk immediately**, so a finished action survives a power cut.
+- **Automatic backups** go to the `backups` folder when the bot starts, every 30 minutes, and when it stops. The newest 48 are kept, plus one a day for 30 days. `/admin backup` makes one on demand. Set `BACKUP_DIR` in `.env` to a OneDrive or Google Drive folder to keep a copy off this PC too.
+- **Startup check.** If the save file is ever damaged, the bot refuses to start instead of overwriting it.
+- **Restoring.** Close the bot, run `restore_backup.bat`, and pick a backup. Your current save is renamed, never deleted.
+- **Updates never wipe data.** New versions add to the save file in place.
+
 ## Custom ore art
 
 Every image is drawn in code (`game/images.py`). To use your own art for an ore, save a square PNG with a transparent background as `assets/ores/<ore key>.png`, for example `assets/ores/sunshard.png`. Ore keys are in `game/data.py`. Good free generators for this: Microsoft Designer / Bing Image Creator (free, DALL·E based), ChatGPT's free image generation, or Google Gemini. A prompt that works well: *"single glowing purple crystal ore, game item icon, centered, transparent background, stylized, no text"*.
