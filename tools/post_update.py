@@ -1,12 +1,14 @@
 """Posts update notes to your Discord update channel through a webhook, with your custom GIF.
 
     python tools/post_update.py updates/0.1.0.md
+    python tools/post_update.py               -> posts the newest file in updates/
 
 The first "# " line of the file becomes the title, the rest is the message.
 Set UPDATE_WEBHOOK_URL in .env. The image is assets/update.gif, .png or .jpg (first one found)
 unless you set UPDATE_GIF to another file.
 Add --dry-run to print what would be sent without posting.
 """
+import glob
 import json
 import os
 import sys
@@ -22,7 +24,11 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     dry = "--dry-run" in sys.argv
     if not args:
-        raise SystemExit("Usage: python tools/post_update.py updates/<version>.md [--dry-run]")
+        notes = sorted(glob.glob(os.path.join(ROOT, "updates", "*.md")), key=os.path.getmtime)
+        if not notes:
+            raise SystemExit("No update notes found in the updates folder.")
+        args = [notes[-1]]
+        print("Posting the newest notes:", os.path.basename(notes[-1]))
     with open(args[0], encoding="utf-8") as f:
         text = f.read().strip()
     title, body = "Astro Tweakin Update", text
@@ -60,7 +66,7 @@ def main():
     r = requests.post(url, data={"payload_json": json.dumps(payload)}, files=files, timeout=30)
     if r.status_code >= 300:
         raise SystemExit(f"Discord said {r.status_code}: {r.text}")
-    print("Posted update:", title)
+    print("Posted! Check your update channel:", title)
 
 
 if __name__ == "__main__":
