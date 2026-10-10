@@ -67,12 +67,34 @@ def B(action, uid, label, emoji, style=discord.ButtonStyle.secondary, disabled=F
     return PanelButton(action, uid, label, style, emoji, disabled, row)
 
 
+class PanelSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"cs_sel:(?P<action>[a-z0-9_]+):(?P<uid>\d+)"):
+    """A dropdown on a panel (lock items, pick ores to smelt). Works after restarts like PanelButton."""
+
+    def __init__(self, action, uid, options, placeholder=None, row=None):
+        options = options or [discord.SelectOption(label="(nothing)", value="none")]
+        super().__init__(discord.ui.Select(custom_id=f"cs_sel:{action}:{uid}", options=options[:25],
+                                           placeholder=placeholder, min_values=1,
+                                           max_values=min(25, len(options)), row=row))
+        self.action = action
+        self.uid = uid
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["action"], int(match["uid"]), list(item.options), item.placeholder)
+
+    async def callback(self, interaction):
+        interaction.extras["values"] = [v for v in interaction.data.get("values", []) if v != "none"]
+        await interaction.client.get_cog("Game").handle(interaction, self.action, self.uid)
+
+
 class Game(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
         self.next_swing = {}
         self.locks = collections.defaultdict(asyncio.Lock)
+        self.thumbs = {}          # message id -> ore key whose picture is already attached there
+        self.bg_tasks = set()
 
     # ------------------------------------------------------------ panels
 
@@ -140,8 +162,10 @@ class Game(commands.Cog):
             e.description = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in
                                       sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance))
             e.color = color_of(best.tier_info.color) if best.tier != "common" else e.color
-            files.append(ore_file(best))
-            e.set_thumbnail(url="attachment://ore.png")
+            if TIER_ORDER.index(best.tier) >= TIER_ORDER.index("rare"):
+                # only rare+ finds get a picture: uploading one on every swing was most of the click lag
+                files.append(ore_file(best))
+                e.set_thumbnail(url="attachment://ore.png")
         elif headline is None:
             e.description = f"*{layer.blurb}*\nHit **Mine** to swing your pickaxe."
         if headline:
@@ -177,7 +201,8 @@ class Game(commands.Cog):
                     value=f"{cost:,} coins · digs 1 ore/min while you're away (up to {data.COLLECT_CAP_HOURS}h)", inline=False)
         smeltable = ", ".join(f"{self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR}x {n}"
                               for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR)
-        e.add_field(name="🔥 Smelt", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more."
+        e.add_field(name="🔥 Smelt", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more. "
+                    "Smelt all skips 🔒 locked ores, or pick exactly which ones below."
                     + (f"\nReady: {smeltable}" if smeltable else ""), inline=False)
         if note:
             e.description = note
@@ -189,6 +214,12 @@ class Game(commands.Cog):
         v.add_item(B("smelt", uid, "Smelt all", "🔥"))
         v.add_item(B("workshop", uid, "Workshop", "🔧", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
+        locked = self.db.locked(uid)
+        opts = [discord.SelectOption(label=f"{n} ({self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR} bars)", value=b,
+                                     description=f"{self.db.qty(uid, 'ore:' + b):,} ore" + (" · locked, Smelt all skips it" if 'ore:' + b in locked else ""))
+                for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR]
+        if opts:
+            v.add_item(PanelSelect("smeltpick", uid, opts, "🔥 Pick which ores to smelt...", row=2))
         banner = images.shop_banner(user["coins"], engine.goals(self.db, uid), nxt)
         files = [discord.File(io.BytesIO(banner), filename="shop.jpg")]
         e.set_image(url="attachment://shop.jpg")
@@ -210,10 +241,12 @@ class Game(commands.Cog):
         v.add_item(B("shop", uid, "Back to shop", "↩️", row=2))
         return e, [], v
 
-    def inventory_panel(self, uid):
+    def inventory_panel(self, uid, note=None):
         user = self.db.user(uid)
         items = self.db.items(uid)
-        e = discord.Embed(title=f"🎒 {user['name']}'s Inventory", color=discord.Color.dark_teal())
+        locked = self.db.locked(uid)
+        lk = lambda item: "🔒" if item in locked else ""
+        e = discord.Embed(title=f"🎒 {user['name']}'s Inventory", color=discord.Color.dark_teal(), description=note)
         by_tier = collections.defaultdict(list)
         worth = 0
         mult = engine.sell_mult(user)
@@ -221,10 +254,10 @@ class Game(commands.Cog):
             kind, key = item.split(":", 1)
             if kind == "ore":
                 o = ORE_BY_KEY[key]
-                by_tier[o.tier].append((o.chance, f"{o.name} x{q:,}"))
+                by_tier[o.tier].append((o.chance, f"{lk(item)}{o.name} x{q:,}"))
                 worth += o.value * q
             elif kind == "bar":
-                by_tier["bars"].append((0, f"{data.BARS[key][0]} x{q:,}"))
+                by_tier["bars"].append((0, f"{lk(item)}{data.BARS[key][0]} x{q:,}"))
                 worth += data.bar_value(key) * q
             elif kind == "snack":
                 s = data.SNACK_BY_KEY[key]
@@ -238,12 +271,30 @@ class Game(commands.Cog):
                 e.add_field(name=name, value=val[:1024], inline=False)
         if not items:
             e.description = "Empty. Go mine something!"
-        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell keeps Epic+ ores, bars and pickaxe materials")
+        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell keeps Epic+ ores, bars and pickaxe materials · "
+                          f"🔒 locked items are never sold")
         v = discord.ui.View(timeout=None)
         v.add_item(B("sell", uid, "Sell", "💰", discord.ButtonStyle.success))
-        v.add_item(B("sellall", uid, "Sell everything (even rares)", "⚠️", discord.ButtonStyle.danger))
+        v.add_item(B("sellall", uid, "Sell everything (except locked)", "⚠️", discord.ButtonStyle.danger))
         v.add_item(B("back", uid, "Back", "↩️"))
+        opts = []
+        for item, q in sorted(items.items(), key=lambda kv: -self._rank(kv[0])):
+            if item.split(":", 1)[0] not in ("ore", "bar"):
+                continue
+            on = item in locked
+            opts.append(discord.SelectOption(label=f"{engine.item_name(item)} x{q:,}"[:100], value=item, emoji="🔒" if on else None,
+                                             description="Locked. Pick to unlock" if on else "Pick to lock (never sold)"))
+        if opts:
+            more = " (rarest 25 shown, /lock for the rest)" if len(opts) > 25 else ""
+            v.add_item(PanelSelect("lockpick", uid, opts, f"🔒 Lock or unlock items...{more}"[:150], row=1))
         return e, [], v
+
+    @staticmethod
+    def _rank(item):
+        kind, key = item.split(":", 1)
+        if kind == "ore":
+            return ORE_BY_KEY[key].chance
+        return 0
 
     # ------------------------------------------------------------ actions
 
@@ -291,9 +342,19 @@ class Game(commands.Cog):
         if not (sp and await sp.dispatch(interaction, action, uid)):
             await interaction.response.defer()
 
-    async def show(self, interaction, panel):
+    async def show(self, interaction, panel, thumb=None):
+        """Edits the panel message. thumb = the ore whose picture the panel shows; if that picture is
+        already on the message it isn't uploaded again (that upload was most of a mine click's lag)."""
         e, files, v = panel
+        mid = interaction.message.id if interaction.message else None
+        if thumb and mid and self.thumbs.get(mid) == thumb:
+            await interaction.response.edit_message(embed=e, view=v)
+            return
         await interaction.response.edit_message(embed=e, attachments=files, view=v)
+        if mid:
+            if len(self.thumbs) > 5000:
+                self.thumbs.clear()
+            self.thumbs[mid] = thumb
 
     async def do_mine(self, interaction, uid):
         wait = self.next_swing.get(uid, 0) - time.time()
@@ -304,16 +365,31 @@ class Game(commands.Cog):
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)
         res = engine.swing(self.db, uid)
         head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
-        await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores))
+        panel = self.main_panel(uid, headline=head, ores=res.ores)
+        await self.show(interaction, panel, thumb=res.best.key if panel[1] else None)
         await self.celebrate(interaction, res.best)
         sp = self.bot.get_cog("Space")
         if sp:
             await sp.maybe_check(interaction, uid)
 
     async def celebrate(self, interaction, ore):
-        tier = ore.tier_info
-        if tier.effect < 1:
+        """Posts the rare-find animation in the background so the next click isn't stuck waiting for it."""
+        if ore is None or ore.tier_info.effect < 1:
             return
+        task = asyncio.create_task(self._celebrate(interaction, ore))
+        self.bg_tasks.add(task)
+        task.add_done_callback(self.bg_tasks.discard)
+
+    async def _celebrate(self, interaction, ore):
+        try:
+            await self._post_reveal(interaction, ore)
+        except discord.HTTPException:
+            log.warning("Couldn't post the reveal for %s", ore.key)
+        except Exception:
+            log.exception("Reveal failed for %s", ore.key)
+
+    async def _post_reveal(self, interaction, ore):
+        tier = ore.tier_info
         name = interaction.user.display_name
         gif = await asyncio.to_thread(images.reveal_gif, ore, name)
         text = shout_line(name, ore)
@@ -373,9 +449,8 @@ class Game(commands.Cog):
         head = f"🐌 Your sluglings dug **{len(ores):,}** ores over {fmt_time(elapsed)}:\n{lines}" + (f"\n…and {more} more kinds" if more > 0 else "") \
             + (f"\n♻️ Auto-sold for **{sold:,}** coins" if sold else "")
         e, files, v = self.main_panel(uid, headline=head)
-        files = [ore_file(best)]
         e.set_thumbnail(url="attachment://ore.png")
-        await interaction.response.edit_message(embed=e, attachments=files, view=v)
+        await self.show(interaction, (e, [ore_file(best)], v), thumb=best.key)
         await self.celebrate(interaction, best)
 
     async def do_autosell(self, interaction, uid):
@@ -427,12 +502,29 @@ class Game(commands.Cog):
         ok, msg = engine.hire_slugling(self.db, uid)
         await self.show(interaction, self.shop_panel(uid, note=("✅ " if ok else "❌ ") + msg))
 
-    async def do_smelt(self, interaction, uid):
-        made, fee = engine.smelt_all(self.db, uid)
+    async def do_smeltpick(self, interaction, uid):
+        picked = [b for b in interaction.extras.get("values", []) if b in data.BARS]
+        if not picked:
+            await self.show(interaction, self.shop_panel(uid))
+            return
+        await self.do_smelt(interaction, uid, only=picked)
+
+    async def do_lockpick(self, interaction, uid):
+        on, off = engine.toggle_locks(self.db, uid, interaction.extras.get("values", []))
+        parts = []
+        if on:
+            parts.append("🔒 Locked " + ", ".join(on))
+        if off:
+            parts.append("🔓 Unlocked " + ", ".join(off))
+        await self.show(interaction, self.inventory_panel(uid, note=". ".join(parts) or None))
+
+    async def do_smelt(self, interaction, uid, only=None):
+        made, fee = engine.smelt_all(self.db, uid, only=only)
         if made:
             note = "🔥 Smelted " + ", ".join(f"{n}x {k}" for k, n in made.items()) + f" for {fee:,} coins."
         else:
-            note = f"❌ You need {data.ORE_PER_BAR} of an ore (copper, tin, iron, silver or gold) to smelt a bar."
+            note = (f"❌ You need {data.ORE_PER_BAR} of an ore (copper, tin, iron, silver or gold) and the coin fee to smelt a bar."
+                    + (" Smelt all skips 🔒 locked ores, so pick them from the menu." if only is None and self.db.locked(uid) else ""))
         await self.show(interaction, self.shop_panel(uid, note=note))
 
     async def do_rebirthyes(self, interaction, uid):
@@ -601,6 +693,33 @@ class Game(commands.Cog):
         v.add_item(B("back", uid, "Cancel", "↩️"))
         await interaction.response.send_message(embed=e, view=v)
 
+    @app_commands.command(name="lock", description="Lock or unlock an item so it never gets sold")
+    async def lock(self, interaction: discord.Interaction, item: str):
+        uid = interaction.user.id
+        self.db.user(uid, interaction.user.display_name)
+        if self.db.qty(uid, item) <= 0 and item not in self.db.locked(uid):
+            await interaction.response.send_message("You don't have that item. Pick one from the list as you type.", ephemeral=True)
+            return
+        on, off = engine.toggle_locks(self.db, uid, [item])
+        msg = f"🔒 **{on[0]}** is locked. Sell, auto-sell, Smelt all and Tim won't touch it." if on else \
+            f"🔓 **{off[0]}** is unlocked." if off else "That item can't be locked."
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @lock.autocomplete("item")
+    async def lock_autocomplete(self, interaction, current: str):
+        uid = interaction.user.id
+        locked = self.db.locked(uid)
+        items = sorted(set(self.db.items(uid)) | locked, key=lambda i: -self._rank(i))
+        out = []
+        for i in items:
+            try:
+                name = engine.item_name(i)
+            except KeyError:
+                continue
+            if current.lower() in name.lower():
+                out.append(app_commands.Choice(name=("🔒 " if i in locked else "") + name, value=i))
+        return out[:25]
+
     @app_commands.command(name="help", description="How to play Astro Tweakin")
     async def help(self, interaction: discord.Interaction):
         e = discord.Embed(title="🚀 Astro Tweakin", color=discord.Color.green(), description=(
@@ -627,5 +746,5 @@ class Game(commands.Cog):
 
 
 async def setup(bot):
-    bot.add_dynamic_items(PanelButton)
+    bot.add_dynamic_items(PanelButton, PanelSelect)
     await bot.add_cog(Game(bot))

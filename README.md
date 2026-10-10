@@ -21,6 +21,7 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | ⛏️ Mine | Rolls for ores. Each ore has a "1 in N" chance and your luck divides N. |
 | 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, haste or double dig. |
 | 💰 Sell | Sells ores. Keeps Epic+ ores, bars and the materials for your next pickaxe. |
+| 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt all, or fenced. |
 | 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars. |
 | 🔧 Workshop | Build rocket parts (fuel, hull, nav computer, oxygen, warp core...) from ores. |
 | 🐌 Collect | Sluglings dig 1 ore a minute each while you're offline (up to 12h). |
@@ -78,7 +79,7 @@ Everything is saved in `astro_tweakin.db` next to the bot. Here's how it's prote
 
 - **All-or-nothing saves.** Every button press is saved as one unit. A crash, error or power cut mid-action rolls it back instead of half-applying it (no paying for a pickaxe you didn't get).
 - **No negatives or dupes.** Coins and items can't go below zero, and double-clicking can't run the same action twice at once.
-- **Written to disk immediately**, so a finished action survives a power cut.
+- **Flushed to disk every 5 seconds.** A crash of the bot loses nothing, and a sudden power cut can lose at most the last few seconds of play. The save file itself can't be corrupted either way. (Syncing on every click made buttons slow on Windows.)
 - **Automatic backups** go to the `backups` folder when the bot starts, every 30 minutes, and when it stops. The newest 48 are kept, plus one a day for 30 days. `/admin backup` makes one on demand. Set `BACKUP_DIR` in `.env` to a OneDrive or Google Drive folder to keep a copy off this PC too.
 - **Startup check.** If the save file is ever damaged, the bot refuses to start instead of overwriting it.
 - **Restoring.** Close the bot, run `restore_backup.bat`, and pick a backup. Your current save is renamed, never deleted.

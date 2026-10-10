@@ -303,8 +303,23 @@ def _fit(text, max_w, size):
     return size
 
 
+_REVEALS = {}   # (ore, name) -> GIF bytes, so finding the same ore again doesn't re-render it
+
+
 def reveal_gif(ore, user_name, frames=None):
-    """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly."""
+    """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly. Cached in memory."""
+    key = (ore.key, user_name, frames)
+    if key in _REVEALS:
+        _REVEALS[key] = _REVEALS.pop(key)          # mark as recently used
+        return _REVEALS[key]
+    gif = _render_reveal(ore, user_name, frames)
+    _REVEALS[key] = gif
+    while len(_REVEALS) > 40:
+        _REVEALS.pop(next(iter(_REVEALS)))
+    return gif
+
+
+def _render_reveal(ore, user_name, frames=None):
     tier = ore.tier_info
     W, H = 480, 330
     N = frames or (24 if tier.effect <= 1 else 32)
@@ -521,14 +536,26 @@ def pickaxe_icon(pick):
 SHOP_BG = os.path.join(ROOT, "assets", "shop_bg.png")   # swap this file to change the shop picture
 
 
+_SHOP_BG_CACHE = {}
+
+
+def _shop_bg():
+    """The shop picture resized once and kept in memory (reloaded if you swap the file)."""
+    mtime = os.path.getmtime(SHOP_BG) if os.path.exists(SHOP_BG) else 0
+    if _SHOP_BG_CACHE.get("mtime") != mtime or "img" not in _SHOP_BG_CACHE:
+        if mtime:
+            img = Image.open(SHOP_BG).convert("RGB")
+            img = img.resize((500, int(img.height * 500 / img.width)), Image.LANCZOS)
+        else:
+            img = Image.new("RGB", (500, 400), (25, 20, 35))
+        _SHOP_BG_CACHE.update(mtime=mtime, img=img)
+    return _SHOP_BG_CACHE["img"]
+
+
 def shop_banner(coins, goals, pick=None):
     """The shop picture with a title on top and your coins, next pickaxe and goal bars along the bottom.
     goals: [(label, fraction)] from engine.goals()."""
-    if os.path.exists(SHOP_BG):
-        img = Image.open(SHOP_BG).convert("RGB")
-        img = img.resize((500, int(img.height * 500 / img.width)), Image.LANCZOS)
-    else:
-        img = Image.new("RGB", (500, 400), (25, 20, 35))
+    img = _shop_bg().copy()
     W, H = img.size
     # dark fades at top and bottom so the text reads on any picture
     shade = Image.new("L", (W, H), 0)
@@ -562,7 +589,7 @@ def shop_banner(coins, goals, pick=None):
         _outlined(d, (W - 16, y + 8), f"{int(frac * 100)}%", 16, (255, 255, 255), anchor="rm", stroke=2)
         y += 34
     buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=88)
+    img.save(buf, "JPEG", quality=80)
     return buf.getvalue()
 
 
@@ -647,10 +674,18 @@ def _ship_png(name, paint, hull, engine, stash, stamp=None, stamp_color=(255, 60
     return _png(img.convert("RGB"))
 
 
+_SHIPS = {}
+
+
 def ship_image(name, user, stamp=None, stamp_color=(255, 60, 60)):
     from .data import PAINTS
     paint = PAINTS[user["ship_paint"] % len(PAINTS)][1]
-    return _ship_png(name, paint, user["ship_hull"], user["ship_engine"], user["ship_stash"], stamp, stamp_color)
+    key = (name, paint, user["ship_hull"], user["ship_engine"], user["ship_stash"], stamp, stamp_color)
+    if key not in _SHIPS:
+        if len(_SHIPS) > 100:
+            _SHIPS.clear()
+        _SHIPS[key] = _ship_png(*key)
+    return _SHIPS[key]
 
 
 def police_gif(top, bottom):

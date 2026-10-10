@@ -141,6 +141,24 @@ def autosell(db, uid):
 
 
 @atomic
+def toggle_locks(db, uid, items):
+    """Flips the lock on each item. Returns (locked names, unlocked names)."""
+    have = db.locked(uid)
+    on, off = [], []
+    for item in items:
+        if item.split(":", 1)[0] not in ("ore", "bar", "part", "snack"):
+            continue
+        try:
+            name = item_name(item)
+        except KeyError:
+            continue
+        lock = item not in have
+        db.set_lock(uid, item, lock)
+        (on if lock else off).append(name)
+    return on, off
+
+
+@atomic
 def toggle_autosell(db, uid):
     on = not db.user(uid)["autosell"]
     db.set(uid, autosell=int(on))
@@ -209,7 +227,10 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
     total = 0
     sold = 0
     cap = data.TIER_ORDER.index(max_tier) if max_tier else None
+    locked = db.locked(uid)
     for item, qty in db.items(uid).items():
+        if item in locked:
+            continue                            # locked items are never sold
         kind, key = item.split(":", 1)
         if kind == "ore":
             ore = ORE_BY_KEY[key]
@@ -376,11 +397,18 @@ def ascend(db, uid):
 
 
 @atomic
-def smelt_all(db, uid):
+def smelt_all(db, uid, only=None):
+    """Smelts every bar ore you have enough of. only=[ore keys] smelts just those (even if locked);
+    otherwise locked ores are skipped."""
     user = db.user(uid)
     made = {}
     fee = 0
+    locked = db.locked(uid)
     for bar, (name, cost) in data.BARS.items():
+        if only is not None and bar not in only:
+            continue
+        if only is None and "ore:" + bar in locked:
+            continue
         have = db.qty(uid, "ore:" + bar)
         n = have // data.ORE_PER_BAR
         if n <= 0:

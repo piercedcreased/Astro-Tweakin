@@ -5,7 +5,9 @@ Data-safety rules:
   through rolls the whole action back instead of leaving half a purchase.
 - Coins and item counts can never go below zero: a write that would do that raises
   NotEnough and the action is rolled back.
-- synchronous=FULL + WAL: a finished action is on disk even if the PC loses power.
+- WAL + synchronous=NORMAL: the save can't be corrupted by a crash or power cut, and the bot
+  calls checkpoint() every few seconds so at most those last few seconds could be lost if the PC
+  loses power. (FULL synced to disk on every click, which made buttons slow on Windows.)
 - Backups: see game/backup.py.
 """
 import contextlib
@@ -107,6 +109,11 @@ CREATE TABLE IF NOT EXISTS raids (
     target INTEGER NOT NULL,
     at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS locks (
+    user_id INTEGER NOT NULL,
+    item TEXT NOT NULL,
+    PRIMARY KEY (user_id, item)
+);
 CREATE TABLE IF NOT EXISTS claims (
     kind TEXT NOT NULL,
     event INTEGER NOT NULL,
@@ -141,7 +148,7 @@ class DB:
         self._depth = 0
         self.check_integrity()
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=FULL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
         self._migrate()
 
@@ -181,6 +188,13 @@ class DB:
                 self._depth -= 1
                 if outer:
                     self.conn.execute("COMMIT")
+
+    def checkpoint(self):
+        """Flushes recent changes into the main save file on disk (fsync). Run from a background thread."""
+        with self._lock:
+            if self._depth == 0:
+                self.conn.execute("DELETE FROM buffs WHERE expires < ?", (time.time(),))
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
 
     def close(self):
         with self._lock:
@@ -253,9 +267,9 @@ class DB:
 
     # buffs
     def buffs(self, uid):
-        now = time.time()
-        self.run("DELETE FROM buffs WHERE expires < ?", now)
-        return {r["kind"]: (r["amount"], r["expires"]) for r in self.q("SELECT * FROM buffs WHERE user_id=?", uid)}
+        # expired buffs are just ignored here (no write = no disk sync); checkpoint() deletes them later
+        rows = self.q("SELECT * FROM buffs WHERE user_id=? AND expires > ?", uid, time.time())
+        return {r["kind"]: (r["amount"], r["expires"]) for r in rows}
 
     def add_buff(self, uid, kind, amount, seconds):
         cur = self.buffs(uid).get(kind)
@@ -284,6 +298,16 @@ class DB:
             "ON CONFLICT(id) DO UPDATE SET luck=excluded.luck, expires=excluded.expires, label=excluded.label",
             luck, time.time() + seconds, label,
         )
+
+    # locked items are never sold, smelted by "Smelt all" or fenced
+    def locked(self, uid):
+        return {r["item"] for r in self.q("SELECT item FROM locks WHERE user_id=?", uid)}
+
+    def set_lock(self, uid, item, on):
+        if on:
+            self.run("INSERT OR IGNORE INTO locks (user_id, item) VALUES (?, ?)", uid, item)
+        else:
+            self.run("DELETE FROM locks WHERE user_id=? AND item=?", uid, item)
 
     # counters for bounties and achievements ("mined", "raids", ...)
     def bump(self, uid, key, n=1):

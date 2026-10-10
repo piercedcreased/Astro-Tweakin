@@ -105,8 +105,7 @@ class Space(commands.Cog):
         return True
 
     async def show(self, interaction, panel):
-        e, files, v = panel
-        await interaction.response.edit_message(embed=e, attachments=files, view=v)
+        await self.game.show(interaction, panel)
 
     def busy(self, uid):
         c = self.checks.get(uid)

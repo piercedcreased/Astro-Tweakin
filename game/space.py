@@ -403,9 +403,8 @@ def unlocked(db, uid):
     return {r["key"]: r["at"] for r in db.q("SELECT key, at FROM achievements WHERE user_id=?", uid)}
 
 
-@atomic
 def check_achievements(db, uid):
-    """Unlocks anything newly earned. Returns the new Achievements."""
+    """Unlocks anything newly earned. Returns the new Achievements. Only writes when something unlocked."""
     have = unlocked(db, uid)
     todo = [a for a in data.ACHIEVEMENTS if a.key not in have]
     if not todo:
@@ -415,8 +414,10 @@ def check_achievements(db, uid):
     found = db.discovered(uid)
     tiers = {ORE_BY_KEY[k].tier for k in found if k in ORE_BY_KEY}
     new = [a for a in todo if _achieved(a.key, user, stats, tiers, found)]
-    for a in new:
-        db.run("INSERT OR IGNORE INTO achievements (user_id, key, at) VALUES (?, ?, ?)", uid, a.key, time.time())
+    if new:
+        with db.tx():
+            for a in new:
+                db.run("INSERT OR IGNORE INTO achievements (user_id, key, at) VALUES (?, ?, ?)", uid, a.key, time.time())
     return new
 
 
@@ -477,7 +478,7 @@ TIM_DEALS = {
     "box": ("📦", "Mystery Box", "Could be anything. Tim won't say. Tim doesn't know."),
     "snack": ("🍪", "Discount Snack", "Half price, no ores needed. Do not ask where it's been."),
     "rock": ("🪨", "Weird Rock", "\"Trust me bro.\" Tiny chance it's this planet's contraband."),
-    "fence": ("💼", "Fence Hot Cargo", f"Tim buys your cheapest Legendary+ ore (not contraband) for x{data.TIM_FENCE_MULT} its value. No cops asked."),
+    "fence": ("💼", "Fence Hot Cargo", f"Tim buys your cheapest Legendary+ ore (not contraband, not locked) for x{data.TIM_FENCE_MULT} its value. No cops asked."),
 }
 
 
@@ -506,7 +507,8 @@ def tim_price(user, deal, visit):
 
 
 def fence_target(db, uid):
-    hot = [o for o in hot_items(db, uid) if o.tier != "contraband"]
+    locked = db.locked(uid)
+    hot = [o for o in hot_items(db, uid) if o.tier != "contraband" and "ore:" + o.key not in locked]
     return hot[0] if hot else None
 
 
