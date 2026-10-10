@@ -49,7 +49,7 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 ## Update notes with a webhook
 
 1. In your updates channel: ⚙️ Edit Channel → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**, and paste it into `UPDATE_WEBHOOK_URL` in `.env`.
-2. The image posted with every update is `assets/update.jpg`. Swap it for any `update.gif`, `.png` or `.jpg`.
+2. Put any GIFs and images you like in the `update_images` folder. Each update post picks one at random (anything over Discord's 10 MB limit is skipped).
 
 **It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted by the bot the next time it starts. Posted files are remembered in `updates/posted.txt`, so nothing posts twice. To restart without touching the PC, use `/admin restart` in Discord.
 

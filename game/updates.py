@@ -1,19 +1,23 @@
 """Update notes -> Discord webhook.
 
 Drop a new file in updates/ (e.g. updates/0.2.0.md, first "# " line is the title).
-The next time the bot starts it posts every notes file it hasn't posted yet, with the
-update image (assets/update.gif/png/jpg). Posted files are remembered in updates/posted.txt.
+The next time the bot starts it posts every notes file it hasn't posted yet, with a random
+image or GIF from the update_images/ folder. Posted files are remembered in updates/posted.txt.
 """
 import glob
 import json
 import logging
 import os
+import random
 
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPDATES = os.path.join(ROOT, "updates")
 POSTED = os.path.join(UPDATES, "posted.txt")
+IMAGES = os.path.join(ROOT, "update_images")
+IMAGE_TYPES = (".gif", ".png", ".jpg", ".jpeg", ".webp")
+MAX_BYTES = 10 * 1024 * 1024       # Discord's upload limit for webhooks
 log = logging.getLogger("astro-tweakin.updates")
 
 
@@ -34,10 +38,16 @@ def mark_posted(path):
 
 
 def image():
+    """A random image/GIF from update_images/ (skipping files too big for Discord)."""
     gif = os.getenv("UPDATE_GIF")
     if gif:
         return gif if os.path.exists(gif) else None
-    for ext in ("gif", "png", "jpg", "jpeg", "webp"):
+    if os.path.isdir(IMAGES):
+        pool = [os.path.join(IMAGES, f) for f in os.listdir(IMAGES)
+                if f.lower().endswith(IMAGE_TYPES) and os.path.getsize(os.path.join(IMAGES, f)) <= MAX_BYTES]
+        if pool:
+            return random.choice(pool)
+    for ext in ("gif", "png", "jpg", "jpeg", "webp"):     # older single-image setup
         p = os.path.join(ROOT, "assets", "update." + ext)
         if os.path.exists(p):
             return p
