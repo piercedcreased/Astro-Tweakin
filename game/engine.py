@@ -30,6 +30,28 @@ def ores_for_layer(layer):
 _POOLS = {l.num: ores_for_layer(l.num) for l in LAYERS}
 
 
+def _true_odds():
+    """What players actually see for common ores. Rarer ores get checked first, so a common's real
+    odds are lower than its raw number, and a layer's base ore (raw "1 in 1") is really the leftover.
+    Uses each ore's first layer at 1x luck. Rare-and-up ores keep their raw number (it's already right)."""
+    out = {}
+    for ore in data.ORES:
+        if ore.chance >= 50:
+            continue
+        pool = _POOLS[min(ore.layers)]
+        miss = 1.0
+        for o in pool[:-1]:
+            if o is ore:
+                break
+            miss *= 1 - 1 / o.chance
+        p = miss if ore is pool[-1] else miss / ore.chance
+        out[ore.key] = 1 / p
+    return out
+
+
+SHOWN_ODDS = _true_odds()
+
+
 def roll_ore(layer, luck):
     """Roblox-RNG style roll: try each ore from rarest to most common.
 
@@ -506,7 +528,12 @@ def rebirth(db, uid):
 
 
 def fmt_chance(n):
-    return f"1 in {n:,}"
+    """Pass an Ore to show its real odds, or a plain number."""
+    if isinstance(n, data.Ore):
+        n = SHOWN_ODDS.get(n.key, n.chance)
+    if n < 10:
+        return f"1 in {n:.1f}".replace(".0", "")
+    return f"1 in {int(round(n)):,}"
 
 
 def fmt_time(sec):

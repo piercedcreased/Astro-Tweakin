@@ -30,19 +30,19 @@ def ore_file(ore, name="ore.png"):
 
 def ore_line(ore, n=None):
     count = f" x{n:,}" if n and n > 1 else ""
-    return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {fmt_chance(ore.chance)}"
+    return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {fmt_chance(ore)}"
 
 
 def shout_line(name, ore):
     tier = ore.tier_info
     if ore.tier == "contraband":
         return (f"🚨🚔 **{name.upper()} HAS DUG UP CONTRABAND: {ore.name.upper()}!** "
-                f"({fmt_chance(ore.chance)}) Nobody tell the space cops.")
+                f"({fmt_chance(ore)}) Nobody tell the space cops.")
     prefix = "ULTRA RARE " if tier.effect >= 3 else ""
     word = f"{prefix}{tier.name.upper()}"
     article = "AN" if word[0] in "AEIOU" else "A"
     ore_name = ore.name[4:] if ore.name.startswith("The ") else ore.name
-    return f"🚨 **{name.upper()} HAS DUG UP {article} {word} {ore_name.upper()}!** ({fmt_chance(ore.chance)})"
+    return f"🚨 **{name.upper()} HAS DUG UP {article} {word} {ore_name.upper()}!** ({fmt_chance(ore)})"
 
 
 class PanelButton(discord.ui.DynamicItem[discord.ui.Button], template=r"cs:(?P<action>[a-z0-9_]+):(?P<uid>\d+)"):
@@ -597,9 +597,9 @@ class Game(commands.Cog):
             for o in sorted([o for o in ores if o.tier == t], key=lambda o: o.chance):
                 where = LAYERS[min(o.layers) - 1].name
                 if o.key in found:
-                    lines.append(f"✅ **{o.name}** · {fmt_chance(o.chance)} · {where} · x{found[o.key]:,}")
+                    lines.append(f"✅ **{o.name}** · {fmt_chance(o)} · {where} · x{found[o.key]:,}")
                 else:
-                    lines.append(f"❔ ??? · {fmt_chance(o.chance)} · {where}")
+                    lines.append(f"❔ ??? · {fmt_chance(o)} · {where}")
             if lines:
                 e.add_field(name=f"{TIER_EMOJI[t]} {TIERS[t].name}", value="\n".join(lines)[:1024], inline=False)
         await interaction.response.send_message(embed=e, ephemeral=True)
@@ -640,7 +640,7 @@ class Game(commands.Cog):
         seen = o.key in found
         where = ", ".join(engine.layer_label(LAYERS[n - 1]).split(" ", 1)[1] for n in o.layers)
         e = discord.Embed(title=f"{TIER_EMOJI[o.tier]} {o.name if seen else '???'}", color=color_of(o.tier_info.color))
-        e.add_field(name="Rarity", value=f"{o.tier_info.name} · {fmt_chance(o.chance)}")
+        e.add_field(name="Rarity", value=f"{o.tier_info.name} · {fmt_chance(o)}")
         e.add_field(name="Sells for", value=f"{o.value:,} coins")
         e.add_field(name="You've found", value=f"{found.get(o.key, 0):,}")
         e.add_field(name="Found in", value=where[:1024], inline=False)
@@ -655,7 +655,7 @@ class Game(commands.Cog):
     @ore.autocomplete("name")
     async def ore_autocomplete(self, interaction, current: str):
         found = self.db.discovered(interaction.user.id)
-        return [app_commands.Choice(name=(o.name if o.key in found else f"??? ({fmt_chance(o.chance)})")[:100], value=o.key)
+        return [app_commands.Choice(name=(o.name if o.key in found else f"??? ({fmt_chance(o)})")[:100], value=o.key)
                 for o in data.ORES
                 if current.lower() in (o.name.lower() if o.key in found else "???")][:25]
 
@@ -664,7 +664,7 @@ class Game(commands.Cog):
         rows = self.db.q("SELECT f.ore, f.at, u.name FROM finds f LEFT JOIN users u ON u.id = f.user_id "
                          "ORDER BY f.at DESC LIMIT 15")
         lines = [f"{TIER_EMOJI[ORE_BY_KEY[r['ore']].tier]} **{r['name'] or 'Someone'}** found "
-                 f"**{ORE_BY_KEY[r['ore']].name}** ({fmt_chance(ORE_BY_KEY[r['ore']].chance)}) <t:{int(r['at'])}:R>"
+                 f"**{ORE_BY_KEY[r['ore']].name}** ({fmt_chance(ORE_BY_KEY[r['ore']])}) <t:{int(r['at'])}:R>"
                  for r in rows if r["ore"] in ORE_BY_KEY]
         e = discord.Embed(title="💎 Recent rare finds", color=discord.Color.gold(),
                           description="\n".join(lines) or "Nobody has found anything 1 in 10,000 or rarer yet.")
