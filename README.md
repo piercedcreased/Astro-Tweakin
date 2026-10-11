@@ -69,8 +69,8 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 
 1. Go to <https://discord.com/developers/applications> → **New Application** → name it Astro Tweakin.
 2. **Bot** tab → **Reset Token** → copy it into `DISCORD_TOKEN` in `.env`. Treat it like a password.
-3. **Installation** tab (or OAuth2 → URL Generator): scopes `bot` and `applications.commands`; permissions **Send Messages**, **Embed Links**, **Attach Files**, **Use External Emojis**, **Read Message History**. Open the link to invite it to your server.
-4. In Discord turn on Developer Mode (Settings → Advanced), then right-click your server → **Copy Server ID** into `GUILD_ID`, and right-click yourself → **Copy User ID** into `ADMIN_USER_IDS`.
+3. **Installation** tab (or OAuth2 → URL Generator): scopes `bot` and `applications.commands`; permissions **Send Messages**, **Embed Links**, **Attach Files**, **Use External Emojis**, **Read Message History**, **View Channels**, **Manage Webhooks**. Open the link to invite it to your server. Use the same link for more servers; commands show up there automatically.
+4. In Discord turn on Developer Mode (Settings → Advanced), then right-click yourself → **Copy User ID** into `ADMIN_USER_IDS`.
 5. In your server run `/admin announce #channel` to pick where rare finds get shouted.
 
 ## Update notes with a webhook

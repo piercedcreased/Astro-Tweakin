@@ -55,14 +55,20 @@ class AstroTweakin(commands.Bot):
         await self.load_extension("cogs.game")
         await self.load_extension("cogs.space")
         await self.load_extension("cogs.admin")
-        if self.guild_id:
-            # syncing to one server makes new commands show up instantly
-            guild = discord.Object(self.guild_id)
+
+    async def sync_guild(self, guild):
+        """Loads the slash commands into one server. Per-server syncing shows them instantly."""
+        try:
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
-        else:
-            synced = await self.tree.sync()
-        log.info("Synced %d slash commands", len(synced))
+            log.info("Synced %d slash commands to %s", len(synced), getattr(guild, "name", guild.id))
+        except discord.HTTPException as e:
+            log.warning("Couldn't sync commands to %s: %s (was the bot invited with applications.commands?)",
+                        getattr(guild, "name", guild.id), e)
+
+    async def on_guild_join(self, guild):
+        log.info("Joined a new server: %s", guild.name)
+        await self.sync_guild(guild)
 
     @tasks.loop(minutes=30)
     async def auto_backup(self):
@@ -170,6 +176,10 @@ class AstroTweakin(commands.Bot):
 
     async def on_ready(self):
         log.info("Logged in as %s (%s)", self.user, self.user.id)
+        if not getattr(self, "_synced", False):
+            self._synced = True
+            for guild in self.guilds:          # every server the bot is in, not just GUILD_ID
+                await self.sync_guild(guild)
         if not getattr(self, "_posted_updates", False):
             self._posted_updates = True
             try:
