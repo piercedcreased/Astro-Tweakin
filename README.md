@@ -45,7 +45,14 @@ Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/lead
 
 Meteors and Tim post in the channel set with `/admin announce` (or `ANNOUNCE_CHANNEL_ID`). Without one they don't appear.
 
-Admins (Manage Server, or listed in `ADMIN_USER_IDS`): `/admin announce`, `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`, `/admin meteor`, `/admin tim`, `/admin cops` (sends a cargo check at yourself to test it).
+Admins (Manage Server, or listed in `ADMIN_USER_IDS`):
+- `/admin botchannel` add/remove/clear: limit the game to certain channels.
+- `/admin announce`: channel for rare finds, meteors and Tweaker Tim.
+- `/admin updatechannel`: channel for update notes (the bot makes the webhook itself; needs Manage Webhooks).
+- `/admin settings` shows all of the above.
+- `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`, `/admin meteor`, `/admin tim`, `/admin cops`, `/admin testerror`.
+
+**Error reports:** any error gets written to `logs/errors.log` and DM'd to whoever owns the bot application (or the IDs in `ERROR_DM_USER_IDS`) as a text file. Send that file to Claude to get it fixed. `/admin testerror` sends a fake one to check it works.
 
 ## Running it on your PC
 

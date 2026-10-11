@@ -75,11 +75,32 @@ def build(path):
     return title, payload, img, fname
 
 
+WEBHOOK_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "updates", "webhook.txt")
+
+
+def webhook_url():
+    """The update channel's webhook: set with /admin updatechannel (saved in updates/webhook.txt),
+    or UPDATE_WEBHOOK_URL in .env."""
+    try:
+        with open(WEBHOOK_FILE, encoding="utf-8") as f:
+            url = f.read().strip()
+            if url:
+                return url
+    except OSError:
+        pass
+    return os.getenv("UPDATE_WEBHOOK_URL")
+
+
+def set_webhook_url(url):
+    with open(WEBHOOK_FILE, "w", encoding="utf-8") as f:
+        f.write(url)
+
+
 def post(path):
     """Posts one notes file. Returns its title. Raises RuntimeError on failure."""
-    url = os.getenv("UPDATE_WEBHOOK_URL")
+    url = webhook_url()
     if not url:
-        raise RuntimeError("Set UPDATE_WEBHOOK_URL in .env first (see README).")
+        raise RuntimeError("No update channel yet. Use /admin updatechannel in Discord, or set UPDATE_WEBHOOK_URL in .env.")
     title, payload, img, fname = build(path)
     files = None
     if img:
@@ -103,7 +124,7 @@ def post_pending():
             mark_posted(p)
         log.info("Update notes: remembered %d existing file(s) as already posted", len(notes))
         return []
-    if not os.getenv("UPDATE_WEBHOOK_URL"):
+    if not webhook_url():
         return []
     out = []
     for p in notes:

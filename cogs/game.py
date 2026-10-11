@@ -25,7 +25,7 @@ def color_of(rgb):
 
 
 def ore_file(ore, name="ore.png"):
-    return discord.File(io.BytesIO(images.ore_icon(ore)), filename=name)
+    return discord.File(io.BytesIO(images.ore_thumb(ore)), filename=name)
 
 
 def ore_line(ore, n=None):
@@ -70,17 +70,17 @@ def B(action, uid, label, emoji, style=discord.ButtonStyle.secondary, disabled=F
 class PanelSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"cs_sel:(?P<action>[a-z0-9_]+):(?P<uid>\d+)"):
     """A dropdown on a panel (lock items, pick ores to smelt). Works after restarts like PanelButton."""
 
-    def __init__(self, action, uid, options, placeholder=None, row=None):
+    def __init__(self, action, uid, options, placeholder=None, row=None, max_values=None):
         options = options or [discord.SelectOption(label="(nothing)", value="none")]
         super().__init__(discord.ui.Select(custom_id=f"cs_sel:{action}:{uid}", options=options[:25],
                                            placeholder=placeholder, min_values=1,
-                                           max_values=min(25, len(options)), row=row))
+                                           max_values=min(max_values or 25, len(options[:25])), row=row))
         self.action = action
         self.uid = uid
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match):
-        return cls(match["action"], int(match["uid"]), list(item.options), item.placeholder)
+        return cls(match["action"], int(match["uid"]), list(item.options), item.placeholder, max_values=item.max_values)
 
     async def callback(self, interaction):
         interaction.extras["values"] = [v for v in interaction.data.get("values", []) if v != "none"]
@@ -149,6 +149,7 @@ class Game(commands.Cog):
         v.add_item(B("bounties", uid, "Bounties", "📜", row=2))
         v.add_item(B("snacks", uid, "Snacks", "🍬", row=2))
         v.add_item(B("trophies", uid, "Achievements", "🏆", row=2))
+        v.add_item(B("lb", uid, "Leaderboard", "📊", row=2))
         return v
 
     def main_panel(self, uid, headline=None, ores=None, note=None):
@@ -162,10 +163,9 @@ class Game(commands.Cog):
             e.description = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in
                                       sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance))
             e.color = color_of(best.tier_info.color) if best.tier != "common" else e.color
-            if TIER_ORDER.index(best.tier) >= TIER_ORDER.index("rare"):
-                # only rare+ finds get a picture: uploading one on every swing was most of the click lag
-                files.append(ore_file(best))
-                e.set_thumbnail(url="attachment://ore.png")
+            # the picture is only uploaded when the best ore changes (see show()), so this stays fast
+            files.append(ore_file(best))
+            e.set_thumbnail(url="attachment://ore.png")
         elif headline is None:
             e.description = f"*{layer.blurb}*\nHit **Mine** to swing your pickaxe."
         if headline:
@@ -332,7 +332,8 @@ class Game(commands.Cog):
             except NotEnough:
                 await self.oops(interaction, "You don't have enough for that anymore. Nothing was taken.")
             except Exception:
-                log.exception("Button %s failed for %s", action, uid)
+                log.exception("Button '%s' failed for %s (%s) in #%s", action, interaction.user.display_name, uid,
+                              getattr(interaction.channel, "name", "?"))
                 await self.oops(interaction, "Something went wrong. Your progress is safe, nothing was changed.")
 
     async def oops(self, interaction, text):
@@ -670,27 +671,68 @@ class Game(commands.Cog):
                           description="\n".join(lines) or "Nobody has found anything 1 in 10,000 or rarer yet.")
         await interaction.response.send_message(embed=e)
 
-    @app_commands.command(name="leaderboard", description="Top miners")
-    @app_commands.choices(by=[app_commands.Choice(name="Coins", value="coins"),
-                              app_commands.Choice(name="Rarest find", value="best"),
-                              app_commands.Choice(name="Ores mined", value="mined")])
-    async def leaderboard(self, interaction: discord.Interaction, by: app_commands.Choice[str] = None):
-        by = by.value if by else "coins"
-        rows = self.db.q("SELECT * FROM users")
+    LB_KINDS = {
+        "coins": "💰 Coins", "best": "💎 Rarest find", "mined": "⛏️ Ores mined", "deepest": "🚀 Furthest planet",
+        "index": "📖 Index (ores found)", "trophies": "🏆 Achievements", "raids": "🏴‍☠️ Raids won",
+        "duels": "⚔️ Duels won", "bounties": "📜 Bounties done", "busts": "🚔 Times busted",
+    }
+
+    def leaderboard_embed(self, by, viewer):
+        rows = [r for r in self.db.q("SELECT * FROM users")]
+        stat = lambda key: {r["user_id"]: r["value"] for r in self.db.q("SELECT user_id, value FROM stats WHERE key=?", key)}
+        count = lambda table: {r["user_id"]: r["n"] for r in self.db.q(f"SELECT user_id, COUNT(*) AS n FROM {table} GROUP BY user_id")}
         if by == "coins":
-            rows = sorted(rows, key=lambda r: (r["rebirths"], r["coins"]), reverse=True)
+            key = lambda r: (r["rebirths"], r["coins"])
             fmt = lambda r: f"{r['coins']:,} coins" + (f" · {r['rebirths']} rebirths" if r["rebirths"] else "")
         elif by == "mined":
-            rows = sorted(rows, key=lambda r: r["total_mined"], reverse=True)
+            key = lambda r: r["total_mined"]
             fmt = lambda r: f"{r['total_mined']:,} ores"
-        else:
-            rows = sorted([r for r in rows if r["best_ore"]], key=lambda r: ORE_BY_KEY[r["best_ore"]].chance, reverse=True)
+        elif by == "deepest":
+            key = lambda r: (r["rebirths"], r["max_layer"])
+            fmt = lambda r: engine.layer_label(LAYERS[r["max_layer"] - 1]) + (f" · {r['rebirths']} rebirths" if r["rebirths"] else "")
+        elif by == "best":
+            rows = [r for r in rows if r["best_ore"] in ORE_BY_KEY]
+            key = lambda r: ORE_BY_KEY[r["best_ore"]].chance
             fmt = lambda r: ore_line(ORE_BY_KEY[r["best_ore"]])
+        else:
+            vals = {"index": lambda: count("discovered"), "trophies": lambda: count("achievements"),
+                    "raids": lambda: stat("raids_won"), "duels": lambda: stat("duels_won"),
+                    "bounties": lambda: stat("bounties_done"), "busts": lambda: stat("checks_busted")}[by]()
+            unit = {"index": f"/{len(data.ORES)} ores", "trophies": f"/{len(data.ACHIEVEMENTS)}", "raids": " raids",
+                    "duels": " wins", "bounties": " bounties", "busts": " busts"}[by]
+            rows = [r for r in rows if vals.get(r["id"], 0) > 0]
+            key = lambda r: vals.get(r["id"], 0)
+            fmt = lambda r: f"{vals.get(r['id'], 0):,}{unit}"
+        rows = sorted(rows, key=key, reverse=True)
         medals = ["🥇", "🥈", "🥉"]
         lines = [f"{medals[i] if i < 3 else f'`#{i + 1}`'} **{r['name']}** · {fmt(r)}" for i, r in enumerate(rows[:10])]
-        e = discord.Embed(title="🏆 Leaderboard", description="\n".join(lines) or "Nobody has mined yet.",
+        e = discord.Embed(title=f"📊 Leaderboard · {self.LB_KINDS[by]}", description="\n".join(lines) or "Nobody's on this one yet.",
                           color=discord.Color.gold())
-        await interaction.response.send_message(embed=e)
+        mine = next((i for i, r in enumerate(rows) if r["id"] == viewer), None)
+        if mine is not None and mine >= 10:
+            e.set_footer(text=f"You're #{mine + 1} · {fmt(rows[mine])}")
+        return e
+
+    def leaderboard_panel(self, uid, by="coins"):
+        e = self.leaderboard_embed(by, uid)
+        v = discord.ui.View(timeout=None)
+        opts = [discord.SelectOption(label=label.split(" ", 1)[1], emoji=label.split(" ", 1)[0], value=k, default=k == by)
+                for k, label in self.LB_KINDS.items()]
+        v.add_item(PanelSelect("lbpick", uid, opts, "Pick a leaderboard...", row=0, max_values=1))
+        v.add_item(B("back", uid, "Back", "↩️", row=1))
+        return e, [], v
+
+    async def do_lb(self, interaction, uid):
+        await self.show(interaction, self.leaderboard_panel(uid))
+
+    async def do_lbpick(self, interaction, uid):
+        picked = (interaction.extras.get("values") or ["coins"])[0]
+        await self.show(interaction, self.leaderboard_panel(uid, picked if picked in self.LB_KINDS else "coins"))
+
+    @app_commands.command(name="leaderboard", description="Top players: coins, rarest find, raids, achievements and more")
+    @app_commands.choices(by=[app_commands.Choice(name=label.split(" ", 1)[1], value=k) for k, label in LB_KINDS.items()])
+    async def leaderboard(self, interaction: discord.Interaction, by: app_commands.Choice[str] = None):
+        await interaction.response.send_message(embed=self.leaderboard_embed(by.value if by else "coins", interaction.user.id))
 
     @app_commands.command(name="rebirth", description="Reset your progress for permanent luck and sell bonuses")
     async def rebirth(self, interaction: discord.Interaction):

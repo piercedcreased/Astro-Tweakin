@@ -9,3 +9,5 @@ assets/cache/
 backups/
 *.before-restore-*
 updates/posted.txt
+logs/
+updates/webhook.txt

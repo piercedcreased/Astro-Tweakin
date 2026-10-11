@@ -374,6 +374,14 @@ class DB:
     def claims(self, kind, event):
         return [r["user_id"] for r in self.q("SELECT user_id FROM claims WHERE kind=? AND event=? ORDER BY at", kind, event)]
 
+    def bot_channels(self, gid):
+        """Channels the game is limited to in this server (empty = anywhere)."""
+        raw = self.meta(f"botchannels:{gid}", "")
+        return [int(x) for x in raw.split(",") if x]
+
+    def set_bot_channels(self, gid, ids):
+        self.set_meta(f"botchannels:{gid}", ",".join(str(i) for i in dict.fromkeys(ids)))
+
     def announce_channel(self, gid):
         row = self.one("SELECT announce_channel FROM guilds WHERE id=?", gid)
         return row["announce_channel"] if row else None

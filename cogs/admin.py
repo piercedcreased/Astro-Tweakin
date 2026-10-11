@@ -1,5 +1,6 @@
 """Owner/admin commands: announce channel, server luck events, giving coins, testing reveals."""
 import io
+import logging
 
 import discord
 from discord import app_commands
@@ -7,7 +8,7 @@ from discord.ext import commands
 
 import asyncio
 
-from game import backup, images
+from game import backup, images, updates
 from game.data import ORES, ORE_BY_KEY
 from cogs.game import shout_line
 
@@ -108,7 +109,71 @@ class Admin(commands.Cog):
         return [app_commands.Choice(name=o.name[:100], value=o.key) for o in ORES
                 if current.lower() in o.name.lower()][:25]
 
+    @group.command(name="botchannel", description="Choose which channels the game works in")
+    @app_commands.describe(action="add or remove a channel, or clear to allow every channel")
+    @app_commands.choices(action=[app_commands.Choice(name="add", value="add"), app_commands.Choice(name="remove", value="remove"),
+                                  app_commands.Choice(name="clear (allow everywhere)", value="clear")])
+    @admin_only
+    async def botchannel(self, interaction: discord.Interaction, action: app_commands.Choice[str],
+                         channel: discord.TextChannel = None):
+        gid = interaction.guild.id
+        chans = self.db.bot_channels(gid)
+        if action.value == "clear":
+            chans = []
+        elif channel is None:
+            await interaction.response.send_message("Pick a channel too.", ephemeral=True)
+            return
+        elif action.value == "add":
+            chans.append(channel.id)
+        else:
+            chans = [c for c in chans if c != channel.id]
+        self.db.set_bot_channels(gid, chans)
+        where = ", ".join(f"<#{c}>" for c in chans) or "every channel"
+        await interaction.response.send_message(f"✅ Game commands now work in: {where}. (/admin commands work anywhere.)",
+                                                ephemeral=True)
+
+    @group.command(name="updatechannel", description="Choose the channel where update notes get posted")
+    @admin_only
+    async def updatechannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        try:
+            hook = await channel.create_webhook(name="Astro Tweakin Updates", reason="Update notes channel set with /admin updatechannel")
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need the **Manage Webhooks** permission in that channel. Give the bot's role that permission and try again.",
+                ephemeral=True)
+            return
+        updates.set_webhook_url(hook.url)
+        await interaction.response.send_message(f"✅ Update notes will now post in {channel.mention}. "
+                                                "(This replaces the webhook in .env.)", ephemeral=True)
+
+    @group.command(name="settings", description="Show where the bot posts and which channels it works in")
+    @admin_only
+    async def settings(self, interaction: discord.Interaction):
+        gid = interaction.guild.id
+        chans = self.db.bot_channels(gid)
+        ann = self.db.announce_channel(gid) or self.bot.default_announce
+        hook = "set" if updates.webhook_url() else "not set (use /admin updatechannel)"
+        e = discord.Embed(title="⚙️ Astro Tweakin settings", color=discord.Color.blurple())
+        e.add_field(name="Game works in", value=", ".join(f"<#{c}>" for c in chans) or "Every channel (/admin botchannel)", inline=False)
+        e.add_field(name="Rare finds, meteors, Tweaker Tim", value=f"<#{ann}>" if ann else "Not set (/admin announce)", inline=False)
+        e.add_field(name="Update notes", value=hook, inline=False)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @group.command(name="testerror", description="Cause a fake error to check that error reports reach your DMs")
+    @admin_only
+    async def testerror(self, interaction: discord.Interaction):
+        await interaction.response.send_message("💥 Making a test error. Check your DMs in a few seconds.", ephemeral=True)
+        try:
+            raise RuntimeError("This is a test error from /admin testerror. Everything is fine.")
+        except RuntimeError:
+            logging.getLogger("astro-tweakin.admin").exception("Test error requested by %s", interaction.user.display_name)
+
     async def cog_app_command_error(self, interaction, error):
+        if not isinstance(error, app_commands.CheckFailure):
+            original = getattr(error, "original", error)
+            logging.getLogger("astro-tweakin.admin").error(
+                "/admin command failed for %s", interaction.user.display_name,
+                exc_info=(type(original), original, original.__traceback__))
         msg = "You need Manage Server to use that." if isinstance(error, app_commands.CheckFailure) else f"Error: {error}"
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)

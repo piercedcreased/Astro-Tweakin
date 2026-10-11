@@ -291,6 +291,20 @@ def ore_icon(ore):
         return f.read()
 
 
+_THUMBS = {}
+
+
+def ore_thumb(ore):
+    """Small, compressed ore picture for embed thumbnails (about 3x smaller upload than ore_icon)."""
+    if ore.key not in _THUMBS:
+        img = Image.open(io.BytesIO(ore_icon(ore))).convert("RGBA").resize((96, 96), Image.LANCZOS)
+        img = img.quantize(colors=96, method=Image.Quantize.FASTOCTREE)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        _THUMBS[ore.key] = buf.getvalue()
+    return _THUMBS[ore.key]
+
+
 # ---------------------------------------------------------------- reveal GIF
 
 def _outlined(d, xy, text, size, fill, anchor="mm", stroke=4):
