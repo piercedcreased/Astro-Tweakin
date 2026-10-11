@@ -43,6 +43,21 @@ Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/lead
 | ☄️ Meteor | Hits the announce channel once a day at a random time (sometimes more). First 5 to mine it get loot. |
 | 👽 Tweaker Tim | Shady trader who shows up about 3 times a day for 10 minutes. His picture is `assets/tim.png`. |
 
+**Mutations (v0.4.0)**
+
+Every ore you dig (mining, sluglings, raids, meteors, Tim's boxes) can roll a mutation. The rarest is checked first:
+
+| Mutation | Chance | Value | |
+|---|---|---|---|
+| ✨ Shiny | 1 in 100 | x3 | |
+| ☢️ Radioactive | 1 in 400 | x6 | |
+| 🌑 Shadow | 1 in 1,000 | x10 | big reveal |
+| 🌈 Holographic | 1 in 2,500 | x20 | reveal + server announcement |
+| 🌌 Galactic | 1 in 10,000 | x50 | reveal + server announcement |
+| 🌀 Tweaked | 1 in 50,000 | x150 | reveal + server announcement |
+
+Mutated ores show in a 🧬 Mutations section of the inventory, can be locked, survive rebirth, and are only sold by "Sell everything". Tuning lives in `MUTATIONS` in `game/data.py`.
+
 Meteors and Tim post in the channel set with `/admin announce` (or `ANNOUNCE_CHANNEL_ID`). Without one they don't appear.
 
 Admins (Manage Server, or listed in `ADMIN_USER_IDS`):

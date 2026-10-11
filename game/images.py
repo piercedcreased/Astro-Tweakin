@@ -320,26 +320,32 @@ def _fit(text, max_w, size):
 _REVEALS = {}   # (ore, name) -> GIF bytes, so finding the same ore again doesn't re-render it
 
 
-def reveal_gif(ore, user_name, frames=None):
-    """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly. Cached in memory."""
-    key = (ore.key, user_name, frames)
+def reveal_gif(ore, user_name, frames=None, mut=None):
+    """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly. Cached in memory.
+    mut = a Mutation: shows the mutated ore with that mutation's colours and title instead."""
+    key = (ore.key, user_name, frames, mut.key if mut else None)
     if key in _REVEALS:
         _REVEALS[key] = _REVEALS.pop(key)          # mark as recently used
         return _REVEALS[key]
-    gif = _render_reveal(ore, user_name, frames)
+    gif = _render_reveal(ore, user_name, frames, mut)
     _REVEALS[key] = gif
     while len(_REVEALS) > 40:
         _REVEALS.pop(next(iter(_REVEALS)))
     return gif
 
 
-def _render_reveal(ore, user_name, frames=None):
+def _render_reveal(ore, user_name, frames=None, mut=None):
     tier = ore.tier_info
+    effect = tier.effect
+    if mut:
+        effect = max(effect, 4 if mut.announce else 2)
     W, H = 480, 330
-    N = frames or (24 if tier.effect <= 1 else 32)
-    color = tier.color
+    N = frames or (24 if effect <= 1 else 32)
+    color = mut.color if mut else tier.color
     main, hi = ore.colors
-    rnd = random.Random(ore.key + user_name)
+    if mut:
+        main, hi = _mix(main, mut.color, 0.5), _light(mut.color, 0.3)
+    rnd = random.Random(ore.key + user_name + (mut.key if mut else ""))
 
     # static background: dark radial gradient tinted with the ore colour
     bg = Image.new("RGB", (W, H), (0, 0, 0))
@@ -349,18 +355,22 @@ def _render_reveal(ore, user_name, frames=None):
         c = _mix(_dark(main, 0.55), (8, 6, 12), t)
         bd.ellipse([W / 2 - W * 0.75 * t, H * 0.48 - H * 1.1 * t, W / 2 + W * 0.75 * t, H * 0.48 + H * 1.1 * t], fill=c)
 
-    icon = ore_image(ore, 150)
-    rays = 12 if tier.effect >= 2 else 8
-    particles = [(rnd.uniform(0, 2 * math.pi), rnd.uniform(0, 1), rnd.uniform(2, 5), rnd.random()) for _ in range(40 if tier.effect >= 2 else 18)]
-    title = f"{tier.name.upper()} FIND!" if tier.effect < 4 else "DIVINE FIND!!"
-    if tier.effect >= 3:
-        title = ("ULTRA RARE " if tier.effect == 3 else "") + title
-    siren = tier.effect >= 5
+    icon = mutated_image(ore, mut.key, 150) if mut else ore_image(ore, 150)
+    rays = 12 if effect >= 2 else 8
+    particles = [(rnd.uniform(0, 2 * math.pi), rnd.uniform(0, 1), rnd.uniform(2, 5), rnd.random()) for _ in range(40 if effect >= 2 else 18)]
+    title = f"{tier.name.upper()} FIND!" if effect < 4 else "DIVINE FIND!!"
+    if effect >= 3:
+        title = ("ULTRA RARE " if effect == 3 else "") + title
+    siren = effect >= 5 and not mut
     if siren:
         title = "!! CONTRABAND !!"
     who = f"{user_name.upper()} DUG UP"
     name = ore.name.upper()
     chance = f"1 in {ore.chance:,}"
+    if mut:
+        title = f"{mut.name.upper()} MUTATION!" + ("!" if mut.announce else "")
+        name = f"{mut.name} {ore.name}".upper()
+        chance = f"1 in {mut.chance:,} mutation · x{mut.mult} value"
     cx, cy = W / 2, H * 0.42
 
     out = []
@@ -376,7 +386,7 @@ def _render_reveal(ore, user_name, frames=None):
             spread = math.pi / rays * 0.55
             if siren:
                 rc = (255, 40, 40) if (k + (f // 4)) % 2 else (40, 80, 255)
-            elif tier.effect >= 4:
+            elif effect >= 4:
                 rc = tuple(int(v * 255) for v in colorsys.hsv_to_rgb((k / rays + t) % 1, 0.6, 1))
             else:
                 rc = hi if k % 2 else color
@@ -390,7 +400,7 @@ def _render_reveal(ore, user_name, frames=None):
         img.paste(layer, (0, 0), layer)
         d = ImageDraw.Draw(img)
         # expanding shockwave rings for mythic and up
-        if tier.effect >= 3:
+        if effect >= 3:
             for k in range(2):
                 p = (t + k / 2) % 1
                 rr = 40 + p * 260
@@ -418,7 +428,7 @@ def _render_reveal(ore, user_name, frames=None):
                 on = ((f // 4) + side) % 2 == 0
                 x0 = 8 if side == 0 else W - 58
                 d.rounded_rectangle([x0, 8, x0 + 50, 40], radius=8, fill=col if on else _dark(col, 0.7))
-        elif tier.effect >= 4:
+        elif effect >= 4:
             tcol = tuple(int(v * 255) for v in colorsys.hsv_to_rgb(t, 0.5, 1))
         else:
             tcol = _light(color, 0.15)
@@ -883,3 +893,118 @@ def tim_card(leaving=False):
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=88)
     return buf.getvalue()
+
+
+# ================================================================ v0.4.0: mutated ores
+
+def _glow(img, color, radius=10, strength=1.6):
+    """Coloured glow around an RGBA image's shape, drawn underneath it."""
+    a = img.split()[3].filter(ImageFilter.GaussianBlur(radius))
+    a = a.point(lambda v: min(255, int(v * strength)))
+    g = Image.new("RGBA", img.size, color + (0,))
+    g.putalpha(a)
+    return Image.alpha_composite(g, img)
+
+
+def _sparkles(img, color, n, seed, scale=1.0):
+    d = ImageDraw.Draw(img)
+    r = random.Random(seed)
+    S = img.width
+    for _ in range(n):
+        x, y = r.uniform(S * 0.15, S * 0.85), r.uniform(S * 0.15, S * 0.85)
+        s = r.uniform(S * 0.03, S * 0.07) * scale
+        d.polygon([(x, y - s * 2), (x + s * 0.5, y), (x, y + s * 2), (x - s * 0.5, y)], fill=color + (255,))
+        d.polygon([(x - s * 2, y), (x, y + s * 0.5), (x + s * 2, y), (x, y - s * 0.5)], fill=color + (255,))
+    return img
+
+
+def mutate_image(img, mut_key, seed=""):
+    """Applies a mutation look to an RGBA ore picture."""
+    S = img.width
+    rgb, alpha = img.convert("RGB"), img.split()[3]
+    pad = int(S * 0.08)
+    if mut_key == "shiny":
+        out = Image.eval(rgb, lambda v: min(255, int(v * 1.25 + 25)))
+        out.putalpha(alpha)
+        out = _glow(out, (255, 230, 120), S // 22)
+        return _sparkles(out, (255, 255, 220), 4, seed + "s")
+    if mut_key == "radioactive":
+        lum = rgb.convert("L")
+        out = Image.merge("RGB", (lum.point(lambda v: int(v * 0.45)), lum.point(lambda v: min(255, int(v * 1.1 + 70))),
+                                  lum.point(lambda v: int(v * 0.25))))
+        out.putalpha(alpha)
+        return _glow(out, (110, 255, 40), S // 14, 2.2)
+    if mut_key == "shadow":
+        lum = rgb.convert("L")
+        out = Image.merge("RGB", (lum.point(lambda v: int(v * 0.25 + 10)), lum.point(lambda v: int(v * 0.15)),
+                                  lum.point(lambda v: int(v * 0.35 + 20))))
+        out.putalpha(alpha)
+        out = _glow(out, (150, 60, 255), S // 18, 2.0)
+        d = ImageDraw.Draw(out)
+        for ex in (0.42, 0.58):                     # two little glowing eyes
+            cx, cy, r = S * ex, S * 0.5, S * 0.025
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(255, 60, 90, 255))
+        return out
+    if mut_key == "holographic":
+        hsv = rgb.convert("HSV")
+        h, s, v = hsv.split()
+        grad = Image.linear_gradient("L").rotate(45, expand=False).resize((S, S))
+        h = Image.eval(grad, lambda g: (g * 2) % 256)
+        s = s.point(lambda x: max(140, x))
+        v = v.point(lambda x: min(255, int(x * 0.8 + 70)))
+        out = Image.merge("HSV", (h, s, v)).convert("RGB")
+        out.putalpha(alpha)
+        shine = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        ImageDraw.Draw(shine).polygon([(S * 0.2, 0), (S * 0.35, 0), (S * 0.75, S), (S * 0.6, S)], fill=(255, 255, 255, 90))
+        shine.putalpha(Image.composite(shine.split()[3], Image.new("L", (S, S), 0), alpha))
+        out = Image.alpha_composite(out, shine)
+        return _glow(out, (140, 220, 255), S // 20)
+    if mut_key == "galactic":
+        sky = Image.new("RGB", (S, S))
+        d = ImageDraw.Draw(sky)
+        for y in range(S):
+            d.line([(0, y), (S, y)], fill=_mix((20, 10, 60), (110, 30, 140), y / S))
+        r = random.Random(seed + "g")
+        for _ in range(S // 3):
+            x, y, b = r.uniform(0, S), r.uniform(0, S), r.randint(150, 255)
+            sz = r.choice([1, 1, 2]) * S / 160
+            d.ellipse([x - sz, y - sz, x + sz, y + sz], fill=(b, b, 255))
+        shade = rgb.convert("L").point(lambda v: int(120 + v * 0.55))
+        out = Image.composite(sky, Image.new("RGB", (S, S)), shade)
+        out = Image.blend(out, sky, 0.35)
+        out.putalpha(alpha)
+        return _sparkles(_glow(out, (130, 90, 255), S // 14, 2.0), (255, 255, 255), 3, seed + "gs", 0.7)
+    if mut_key == "tweaked":
+        inv = Image.eval(rgb, lambda v: 255 - v).convert("HSV")
+        h, s, v = inv.split()
+        h = h.point(lambda x: (x + 170) % 256)
+        s = s.point(lambda x: max(170, x))
+        out = Image.merge("HSV", (h, s, v)).convert("RGB")
+        out.putalpha(alpha)
+        out = out.rotate(-12, resample=Image.BICUBIC)
+        out = _glow(out, (255, 40, 200), S // 12, 2.4)
+        return _sparkles(out, (120, 255, 240), 5, seed + "t", 0.8)
+    return img
+
+
+def mutated_image(ore, mut_key, size=160):
+    big = ore_image(ore, 320)
+    return mutate_image(big, mut_key, ore.key).resize((size, size), Image.LANCZOS)
+
+
+def mutated_icon(ore, mut_key):
+    path = os.path.join(CACHE, f"ore_{ore.key}_{mut_key}.png")
+    if not os.path.exists(path):
+        mutated_image(ore, mut_key).save(path)
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def mutated_thumb(ore, mut_key):
+    k = (ore.key, mut_key)
+    if k not in _THUMBS:
+        img = Image.open(io.BytesIO(mutated_icon(ore, mut_key))).convert("RGBA").resize((96, 96), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.quantize(colors=128, method=Image.Quantize.FASTOCTREE).save(buf, "PNG", optimize=True)
+        _THUMBS[k] = buf.getvalue()
+    return _THUMBS[k]

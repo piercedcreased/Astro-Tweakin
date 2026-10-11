@@ -9,7 +9,7 @@ from discord.ext import commands
 import asyncio
 
 from game import backup, images, updates
-from game.data import ORES, ORE_BY_KEY
+from game.data import MUT_BY_KEY, MUTATIONS, ORES, ORE_BY_KEY
 from cogs.game import shout_line
 
 
@@ -94,14 +94,17 @@ class Admin(commands.Cog):
 
     @group.command(name="preview", description="Show what a rare-find animation looks like (doesn't give the ore)")
     @admin_only
-    async def preview(self, interaction: discord.Interaction, ore: str):
+    @app_commands.choices(mutation=[app_commands.Choice(name=f"{m.emoji} {m.name}", value=m.key) for m in reversed(MUTATIONS)])
+    async def preview(self, interaction: discord.Interaction, ore: str, mutation: app_commands.Choice[str] = None):
         o = ORE_BY_KEY.get(ore)
         if not o:
             await interaction.response.send_message("Unknown ore.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        gif = images.reveal_gif(o, interaction.user.display_name)
-        await interaction.followup.send("Preview: " + shout_line(interaction.user.display_name, o),
+        m = MUT_BY_KEY[mutation.value] if mutation else None
+        gif = await asyncio.to_thread(images.reveal_gif, o, interaction.user.display_name, None, m)
+        text = f"{m.emoji} {m.name} {o.name} (1 in {m.chance:,} mutation, x{m.mult} value)" if m else shout_line(interaction.user.display_name, o)
+        await interaction.followup.send("Preview: " + text,
                                         file=discord.File(io.BytesIO(gif), filename=f"{o.key}.gif"), ephemeral=True)
 
     @preview.autocomplete("ore")

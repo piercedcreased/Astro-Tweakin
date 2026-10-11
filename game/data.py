@@ -552,3 +552,37 @@ ACHIEVEMENTS = [
     Achievement("trillion", "Space Oligarch", "🛸", "Hold 1,000,000,000,000 coins"),
 ]
 ACH_BY_KEY = {a.key: a for a in ACHIEVEMENTS}
+
+
+# ================================================================ v0.4.0 Mutations
+# Any ore you find can come out mutated. Each find rolls every mutation, rarest first.
+@dataclass(frozen=True)
+class Mutation:
+    key: str
+    name: str
+    emoji: str
+    chance: int           # 1 in N per ore found
+    mult: int             # sell value multiplier
+    color: tuple
+    announce: bool        # shout to the server and play the big reveal
+
+
+MUTATIONS = [
+    Mutation("tweaked", "Tweaked", "🌀", 50_000, 150, (255, 40, 200), True),
+    Mutation("galactic", "Galactic", "🌌", 10_000, 50, (110, 80, 255), True),
+    Mutation("holographic", "Holographic", "🌈", 2_500, 20, (120, 230, 255), True),
+    Mutation("shadow", "Shadow", "🌑", 1_000, 10, (90, 40, 140), False),
+    Mutation("radioactive", "Radioactive", "☢️", 400, 6, (120, 255, 60), False),
+    Mutation("shiny", "Shiny", "✨", 100, 3, (255, 235, 120), False),
+]
+MUT_BY_KEY = {m.key: m for m in MUTATIONS}
+MUT_ORDER = [m.key for m in reversed(MUTATIONS)]   # shiny ... tweaked (weakest to strongest)
+
+ACHIEVEMENTS += [
+    Achievement("shiny", "Shiny Hunter", "✨", "Find a mutated ore"),
+    Achievement("holo", "Holo Collector", "🌈", "Find a Holographic ore"),
+    Achievement("galactic", "Galaxy Brain", "🌌", "Find a Galactic ore"),
+    Achievement("tweaked", "Fully Tweaked", "🌀", "Find a Tweaked ore"),
+    Achievement("mutant", "Mutant Menagerie", "🧬", "Find every kind of mutation"),
+]
+ACH_BY_KEY = {a.key: a for a in ACHIEVEMENTS}

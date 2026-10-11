@@ -28,6 +28,19 @@ def ore_file(ore, name="ore.png"):
     return discord.File(io.BytesIO(images.ore_thumb(ore)), filename=name)
 
 
+def mut_file(ore, mut, name="ore.png"):
+    return discord.File(io.BytesIO(images.mutated_thumb(ore, mut.key)), filename=name)
+
+
+def mut_line(ore, mut):
+    return f"{mut.emoji} **{mut.name} {ore.name}**! (1 in {mut.chance:,} mutation, x{mut.mult} value)"
+
+
+def rarest_mut(muts):
+    """muts = [(ore, mutation)] -> the most impressive one"""
+    return max(muts, key=lambda om: (om[1].chance, om[0].chance)) if muts else None
+
+
 def ore_line(ore, n=None):
     count = f" x{n:,}" if n and n > 1 else ""
     return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {fmt_chance(ore)}"
@@ -152,7 +165,7 @@ class Game(commands.Cog):
         v.add_item(B("lb", uid, "Leaderboard", "📊", row=2))
         return v
 
-    def main_panel(self, uid, headline=None, ores=None, note=None):
+    def main_panel(self, uid, headline=None, ores=None, note=None, muts=None):
         user = self.db.user(uid)
         layer = LAYERS[user["layer"] - 1]
         e = discord.Embed(title=f"⛏️ {user['name']}'s Mine · {layer.planet_info.name}", color=color_of(layer.color))
@@ -164,7 +177,13 @@ class Game(commands.Cog):
                                       sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance))
             e.color = color_of(best.tier_info.color) if best.tier != "common" else e.color
             # the picture is only uploaded when the best ore changes (see show()), so this stays fast
-            files.append(ore_file(best))
+            if muts:
+                mo, mm = rarest_mut(muts)
+                e.description = "\n".join(mut_line(o, m) for o, m in muts) + "\n" + e.description
+                e.color = color_of(mm.color)
+                files.append(mut_file(mo, mm))
+            else:
+                files.append(ore_file(best))
             e.set_thumbnail(url="attachment://ore.png")
         elif headline is None:
             e.description = f"*{layer.blurb}*\nHit **Mine** to swing your pickaxe."
@@ -279,14 +298,19 @@ class Game(commands.Cog):
                 by_tier["snacks"].append((0, f"{s.emoji} {s.name} x{q:,}"))
             elif kind == "part":
                 by_tier["parts"].append((0, f"{PART_BY_KEY[key].name} x{q:,}"))
-        for t in list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
+            elif kind == "mut":
+                m, o = engine.split_mut(key)
+                by_tier["muts"].append((m.chance * o.chance, f"{lk(item)}{m.emoji} {m.name} {o.name} x{q:,}"))
+                worth += o.value * m.mult * q
+        for t in ["muts"] + list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
             if by_tier.get(t):
-                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks"}.get(t) or f"{TIER_EMOJI[t]} {TIERS[t].name}"
+                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks", "muts": "🧬 Mutations"}.get(t) \
+                    or f"{TIER_EMOJI[t]} {TIERS[t].name}"
                 val = ", ".join(s for _, s in sorted(by_tier[t], reverse=True))
                 e.add_field(name=name, value=val[:1024], inline=False)
         if not items:
             e.description = "Empty. Go mine something!"
-        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell keeps Epic+ ores, bars and pickaxe materials · "
+        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell keeps Epic+ ores, mutations, bars and pickaxe materials · "
                           f"🔒 locked items are never sold")
         v = discord.ui.View(timeout=None)
         v.add_item(B("sell", uid, "Sell", "💰", discord.ButtonStyle.success))
@@ -294,7 +318,7 @@ class Game(commands.Cog):
         v.add_item(B("back", uid, "Back", "↩️"))
         opts = []
         for item, q in sorted(items.items(), key=lambda kv: -self._rank(kv[0])):
-            if item.split(":", 1)[0] not in ("ore", "bar"):
+            if item.split(":", 1)[0] not in ("ore", "bar", "mut"):
                 continue
             on = item in locked
             opts.append(discord.SelectOption(label=f"{engine.item_name(item)} x{q:,}"[:100], value=item, emoji="🔒" if on else None,
@@ -309,6 +333,9 @@ class Game(commands.Cog):
         kind, key = item.split(":", 1)
         if kind == "ore":
             return ORE_BY_KEY[key].chance
+        if kind == "mut":
+            m, o = engine.split_mut(key)
+            return m.chance * o.chance
         return 0
 
     # ------------------------------------------------------------ actions
@@ -384,42 +411,62 @@ class Game(commands.Cog):
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)
         res = engine.swing(self.db, uid)
         head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
-        panel = self.main_panel(uid, headline=head, ores=res.ores)
-        await self.show(interaction, panel, thumb=res.best.key if panel[1] else None)
-        await self.celebrate(interaction, res.best)
+        panel = self.main_panel(uid, headline=head, ores=res.ores, muts=res.mutations)
+        thumb = None
+        if panel[1]:
+            mo_mm = rarest_mut(res.mutations)
+            thumb = f"{mo_mm[0].key}:{mo_mm[1].key}" if mo_mm else res.best.key
+        await self.show(interaction, panel, thumb=thumb)
+        await self.celebrate(interaction, res.best, res.mutations)
         sp = self.bot.get_cog("Space")
         if sp:
             await sp.maybe_check(interaction, uid)
 
-    async def celebrate(self, interaction, ore):
+    MUT_REVEAL_FROM = 1_000   # Shadow and rarer mutations get the big animation
+
+    async def celebrate(self, interaction, ore, muts=None):
         """Posts the rare-find animation in the background so the next click isn't stuck waiting for it."""
-        if ore is None or ore.tier_info.effect < 1:
+        best_mut = rarest_mut(muts)
+        if best_mut and best_mut[1].chance < self.MUT_REVEAL_FROM:
+            best_mut = None
+        if (ore is None or ore.tier_info.effect < 1) and not best_mut:
             return
-        task = asyncio.create_task(self._celebrate(interaction, ore))
+        task = asyncio.create_task(self._celebrate(interaction, ore, best_mut))
         self.bg_tasks.add(task)
         task.add_done_callback(self.bg_tasks.discard)
 
-    async def _celebrate(self, interaction, ore):
+    async def _celebrate(self, interaction, ore, best_mut=None):
         try:
-            await self._post_reveal(interaction, ore)
+            if ore is not None and ore.tier_info.effect >= 1:
+                await self._post_reveal(interaction, ore)
+            if best_mut:
+                await self._post_reveal(interaction, best_mut[0], best_mut[1])
         except discord.HTTPException:
-            log.warning("Couldn't post the reveal for %s", ore.key)
+            log.warning("Couldn't post the reveal for %s", ore.key if ore else "?")
         except Exception:
-            log.exception("Reveal failed for %s", ore.key)
+            log.exception("Reveal failed for %s", ore.key if ore else "?")
 
-    async def _post_reveal(self, interaction, ore):
+    async def _post_reveal(self, interaction, ore, mut=None):
         tier = ore.tier_info
         name = interaction.user.display_name
-        gif = await asyncio.to_thread(images.reveal_gif, ore, name)
-        text = shout_line(name, ore)
-        await interaction.followup.send(text, file=discord.File(io.BytesIO(gif), filename=f"{ore.key}.gif"))
-        if tier.announce and interaction.guild:
+        gif = await asyncio.to_thread(images.reveal_gif, ore, name, None, mut)
+        if mut:
+            text = (f"{mut.emoji} **{name}** found a **{mut.name.upper()} {ore.name.upper()}**! "
+                    f"(1 in {mut.chance:,} mutation, worth x{mut.mult})")
+            announce = mut.announce
+            fname = f"{mut.key}_{ore.key}.gif"
+        else:
+            text = shout_line(name, ore)
+            announce = tier.announce
+            fname = f"{ore.key}.gif"
+        await interaction.followup.send(text, file=discord.File(io.BytesIO(gif), filename=fname))
+        if announce and interaction.guild:
             cid = self.db.announce_channel(interaction.guild.id) or self.bot.default_announce
             if cid and cid != interaction.channel_id:
                 ch = self.bot.get_channel(cid)
                 if ch:
                     try:
-                        await ch.send(text, file=discord.File(io.BytesIO(gif), filename=f"{ore.key}.gif"))
+                        await ch.send(text, file=discord.File(io.BytesIO(gif), filename=fname))
                     except discord.HTTPException:
                         pass
 
@@ -448,14 +495,14 @@ class Game(commands.Cog):
 
     async def do_sell(self, interaction, uid, keep_rare=True):
         sold, coins = engine.sell_all(self.db, uid, keep_rare)
-        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else "Nothing to sell (Epic+ ores, bars and pickaxe materials are kept)."
+        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else "Nothing to sell (Epic+ ores, mutations, bars and pickaxe materials are kept)."
         await self.show(interaction, self.main_panel(uid, headline=note))
 
     async def do_sellall(self, interaction, uid):
         await self.do_sell(interaction, uid, keep_rare=False)
 
     async def do_collect(self, interaction, uid):
-        ores, elapsed = engine.collect_sluglings(self.db, uid)
+        ores, elapsed, muts = engine.collect_sluglings(self.db, uid)
         if not ores:
             await self.show(interaction, self.main_panel(uid, headline="🐌 Your sluglings haven't dug anything yet. Give them a minute."))
             return
@@ -467,10 +514,17 @@ class Game(commands.Cog):
         more = len(counts) - len(top)
         head = f"🐌 Your sluglings dug **{len(ores):,}** ores over {fmt_time(elapsed)}:\n{lines}" + (f"\n…and {more} more kinds" if more > 0 else "") \
             + (f"\n♻️ Auto-sold for **{sold:,}** coins" if sold else "")
+        if muts:
+            shown = sorted(muts, key=lambda om: -(om[1].chance * om[0].chance))[:6]
+            head = "\n".join(mut_line(o, m) for o, m in shown) + (f"\n…and {len(muts) - 6} more mutations" if len(muts) > 6 else "") + "\n" + head
         e, files, v = self.main_panel(uid, headline=head)
         e.set_thumbnail(url="attachment://ore.png")
-        await self.show(interaction, (e, [ore_file(best)], v), thumb=best.key)
-        await self.celebrate(interaction, best)
+        bm = rarest_mut(muts)
+        if bm:
+            await self.show(interaction, (e, [mut_file(*bm)], v), thumb=f"{bm[0].key}:{bm[1].key}")
+        else:
+            await self.show(interaction, (e, [ore_file(best)], v), thumb=best.key)
+        await self.celebrate(interaction, best, muts)
 
     async def do_autosell(self, interaction, uid):
         on = engine.toggle_autosell(self.db, uid)
@@ -573,6 +627,9 @@ class Game(commands.Cog):
         stats = self.db.stats(member.id)
         e.add_field(name="Smuggling", value=f"🚔 {stats.get('checks_busted', 0)} busts · 😎 {stats.get('checks_survived', 0)} escapes\n"
                                              f"🏴‍☠️ {stats.get('raids_won', 0)} raids · ⚔️ {stats.get('duels_won', 0)} duel wins", inline=False)
+        if stats.get("mutations"):
+            e.add_field(name=f"🧬 Mutations ({stats['mutations']:,})", inline=False, value=" · ".join(
+                f"{m.emoji} {stats.get('mut_' + m.key, 0):,}" for m in reversed(data.MUTATIONS)))
         files = []
         if user["best_ore"]:
             best = ORE_BY_KEY[user["best_ore"]]
@@ -674,7 +731,7 @@ class Game(commands.Cog):
     LB_KINDS = {
         "coins": "💰 Coins", "best": "💎 Rarest find", "mined": "⛏️ Ores mined", "deepest": "🚀 Furthest planet",
         "index": "📖 Index (ores found)", "trophies": "🏆 Achievements", "raids": "🏴‍☠️ Raids won",
-        "duels": "⚔️ Duels won", "bounties": "📜 Bounties done", "busts": "🚔 Times busted",
+        "duels": "⚔️ Duels won", "bounties": "📜 Bounties done", "busts": "🚔 Times busted", "mutations": "🧬 Mutations found",
     }
 
     def leaderboard_embed(self, by, viewer):
@@ -697,9 +754,10 @@ class Game(commands.Cog):
         else:
             vals = {"index": lambda: count("discovered"), "trophies": lambda: count("achievements"),
                     "raids": lambda: stat("raids_won"), "duels": lambda: stat("duels_won"),
-                    "bounties": lambda: stat("bounties_done"), "busts": lambda: stat("checks_busted")}[by]()
+                    "bounties": lambda: stat("bounties_done"), "busts": lambda: stat("checks_busted"),
+                    "mutations": lambda: stat("mutations")}[by]()
             unit = {"index": f"/{len(data.ORES)} ores", "trophies": f"/{len(data.ACHIEVEMENTS)}", "raids": " raids",
-                    "duels": " wins", "bounties": " bounties", "busts": " busts"}[by]
+                    "duels": " wins", "bounties": " bounties", "busts": " busts", "mutations": " mutations"}[by]
             rows = [r for r in rows if vals.get(r["id"], 0) > 0]
             key = lambda r: vals.get(r["id"], 0)
             fmt = lambda r: f"{vals.get(r['id'], 0):,}{unit}"
@@ -797,6 +855,8 @@ class Game(commands.Cog):
             "☄️ A **meteor** hits once a day and 👽 **Tweaker Tim** drops by a few times a day in the announce channel.\n\n"
             "Every planet hides one ultra-rare piece of 🚨 **contraband**. Legendary and rarer finds "
             "get a special animation and get announced to the server.\n"
+            "🧬 Any ore can come out **mutated**: ✨ Shiny, ☢️ Radioactive, 🌑 Shadow, 🌈 Holographic, 🌌 Galactic or "
+            "🌀 Tweaked, worth x3 up to x150. Regular Sell keeps them.\n"
             "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**"))
         await interaction.response.send_message(embed=e, ephemeral=True)
 

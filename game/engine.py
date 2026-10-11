@@ -119,16 +119,50 @@ class SwingResult:
     best: object
     luck: Luck
     autosold: int = 0     # coins from auto-sell
+    mutations: list = field(default_factory=list)   # [(ore, mutation)]
 
 
-@atomic
-def record_finds(db, uid, ores):
+def roll_mutation():
+    """Each found ore has a small chance to be mutated (rarest mutation checked first)."""
+    for m in data.MUTATIONS:
+        if rng.random() * m.chance < 1:
+            return m
+    return None
+
+
+def mut_item(ore, mut):
+    return f"mut:{mut.key}:{ore.key}"
+
+
+def split_mut(key):
+    """'shiny:coal' -> (Mutation, Ore)"""
+    m, o = key.split(":", 1)
+    return data.MUT_BY_KEY[m], ORE_BY_KEY[o]
+
+
+def record_finds(db, uid, ores, mutations=None):
+    """Adds found ores to the bag. Mutated ones are stored separately; they're appended to `mutations`
+    as (ore, mutation) if a list is passed in."""
     counts = {}
     for o in ores:
         counts[o.key] = counts.get(o.key, 0) + 1
     for key, n in counts.items():
-        db.add_item(uid, "ore:" + key, n)
         db.discover(uid, key, n)
+    found_muts = []
+    for o in ores:
+        m = roll_mutation()
+        if m:
+            found_muts.append((o, m))
+            counts[o.key] -= 1
+            db.add_item(uid, mut_item(o, m), 1)
+            db.bump(uid, "mut_" + m.key)
+    if found_muts:
+        db.bump(uid, "mutations", len(found_muts))
+        if mutations is not None:
+            mutations.extend(found_muts)
+    for key, n in counts.items():
+        if n:
+            db.add_item(uid, "ore:" + key, n)
     best = max(ores, key=lambda o: o.chance)
     user = db.user(uid)
     prev = ORE_BY_KEY.get(user["best_ore"]) if user["best_ore"] else None
@@ -149,10 +183,11 @@ def swing(db, uid):
     user = db.user(uid)
     luck = luck_for(db, user)
     ores = [roll_ore(user["layer"], luck.total) for _ in range(rolls_for(db, user))]
-    best = record_finds(db, uid, ores)
+    muts = []
+    best = record_finds(db, uid, ores, muts)
     db.bump(uid, "mined", len(ores))
     coins = autosell(db, uid)
-    return SwingResult(ores, best, luck, coins)
+    return SwingResult(ores, best, luck, coins, muts)
 
 
 def autosell(db, uid):
@@ -168,7 +203,7 @@ def toggle_locks(db, uid, items):
     have = db.locked(uid)
     on, off = [], []
     for item in items:
-        if item.split(":", 1)[0] not in ("ore", "bar", "part", "snack"):
+        if item.split(":", 1)[0] not in ("ore", "bar", "part", "snack", "mut"):
             continue
         try:
             name = item_name(item)
@@ -266,6 +301,12 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
             if n <= 0:
                 continue
             total += ore.value * n
+        elif kind == "mut":
+            if keep_rare or cap is not None:
+                continue                        # mutations are collectibles: only "sell everything" sells them
+            m, ore = split_mut(key)
+            n = qty
+            total += ore.value * m.mult * n
         elif kind == "bar":
             if keep_rare or cap is not None:
                 continue                        # bars are crafting material, only "sell everything" sells them
@@ -312,6 +353,9 @@ def item_name(item):
         return PART_BY_KEY[key].name
     if kind == "snack":
         return data.SNACK_BY_KEY[key].name
+    if kind == "mut":
+        m, ore = split_mut(key)
+        return f"{m.name} {ore.name}"
     return data.BARS[key][0]
 
 
@@ -473,14 +517,15 @@ def collect_sluglings(db, uid):
     elapsed = min(now - user["last_collect"], data.COLLECT_CAP_HOURS * 3600)
     db.set(uid, last_collect=now)
     if user["sluglings"] <= 0 or elapsed < data.SLUGLING_SECONDS_PER_ROLL:
-        return [], elapsed
+        return [], elapsed, []
     n = int(elapsed // data.SLUGLING_SECONDS_PER_ROLL) * user["sluglings"]
     n = min(n, 50_000)
     luck = luck_for(db, user, base=data.SLUGLING_LUCK).total
     ores = [roll_ore(user["layer"], luck) for _ in range(n)]
-    record_finds(db, uid, ores)
+    muts = []
+    record_finds(db, uid, ores, muts)
     db.bump(uid, "collected")
-    return ores, elapsed
+    return ores, elapsed, muts
 
 
 def lucky_roll_ready(user):
@@ -515,7 +560,8 @@ def rebirth(db, uid):
         return False, (f"Rebirth needs **{LAYERS[data.REBIRTH_LAYER - 1].name}** unlocked and "
                        f"{data.REBIRTH_COST:,} coins.")
     keep = {k: v for k, v in db.items(uid).items()
-            if k.startswith("ore:") and data.TIER_ORDER.index(ORE_BY_KEY[k[4:]].tier) >= data.TIER_ORDER.index("legendary")}
+            if k.startswith("mut:") or
+            (k.startswith("ore:") and data.TIER_ORDER.index(ORE_BY_KEY[k[4:]].tier) >= data.TIER_ORDER.index("legendary"))}
     db.run("DELETE FROM items WHERE user_id=?", uid)
     for k, v in keep.items():
         db.add_item(uid, k, v)
@@ -524,7 +570,7 @@ def rebirth(db, uid):
            rebirths=user["rebirths"] + 1, last_collect=time.time())
     n = user["rebirths"] + 1
     return True, (f"**You burned the lab down. Rebirth {n}!** You now have +{int(data.REBIRTH_LUCK * n * 100)}% luck and "
-                  f"+{int(data.REBIRTH_SELL * n * 100)}% sell value forever. Your legendary-and-up ores came with you.")
+                  f"+{int(data.REBIRTH_SELL * n * 100)}% sell value forever. Your legendary-and-up ores and mutated ores came with you.")
 
 
 def fmt_chance(n):

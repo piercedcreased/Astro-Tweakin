@@ -396,6 +396,11 @@ def _achieved(key, user, stats, tiers, found):
         "million": user["coins"] >= 1_000_000,
         "billion": user["coins"] >= 1_000_000_000,
         "trillion": user["coins"] >= 1_000_000_000_000,
+        "shiny": s("mutations", 0) >= 1,
+        "holo": s("mut_holographic", 0) >= 1,
+        "galactic": s("mut_galactic", 0) >= 1,
+        "tweaked": s("mut_tweaked", 0) >= 1,
+        "mutant": all(s("mut_" + mu.key, 0) >= 1 for mu in data.MUTATIONS),
     }[key]
 
 
