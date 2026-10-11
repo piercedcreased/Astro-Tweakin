@@ -3,8 +3,10 @@
 Run with start.bat on Windows, or: python bot.py
 """
 import asyncio
+import glob
 import logging
 import os
+import time
 
 import discord
 from discord.ext import commands
@@ -46,6 +48,10 @@ class AstroTweakin(commands.Bot):
         self.auto_backup.change_interval(minutes=float(os.getenv("BACKUP_EVERY_MINUTES") or 30))
         self.auto_backup.start()
         self.db.start_flusher()
+        self.code_stamp = self.code_files_stamp()
+        self.code_changed_at = None
+        if (os.getenv("AUTO_RESTART") or "on").lower() not in ("off", "0", "false", "no"):
+            self.watch_code.start()
         await self.load_extension("cogs.game")
         await self.load_extension("cogs.space")
         await self.load_extension("cogs.admin")
@@ -65,12 +71,66 @@ class AstroTweakin(commands.Bot):
         except Exception:
             log.exception("Automatic backup failed")
 
+    # ------------------------------------------------------------ auto restart on new code
+
+    @staticmethod
+    def code_files():
+        files = [os.path.join(ROOT, "bot.py")]
+        for pattern in ("game/*.py", "cogs/*.py", "updates/*.md", "requirements.txt"):
+            files += glob.glob(os.path.join(ROOT, pattern))
+        return sorted(files)
+
+    def code_files_stamp(self):
+        out = {}
+        for f in self.code_files():
+            try:
+                st = os.stat(f)
+                out[f] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
+        return out
+
+    @tasks.loop(seconds=5)
+    async def watch_code(self):
+        """When new bot files land in the folder (an update), restart to load them. Waits until the files
+        stop changing for 15 seconds and checks the new code has no syntax errors first."""
+        try:
+            stamp = await asyncio.to_thread(self.code_files_stamp)
+            if stamp != self.code_stamp:
+                self.code_stamp = stamp
+                self.code_changed_at = time.time()
+                log.info("New bot files detected, restarting once they stop changing...")
+                return
+            if self.code_changed_at and time.time() - self.code_changed_at >= 15:
+                self.code_changed_at = None
+                bad = await asyncio.to_thread(self.broken_files)
+                if bad:
+                    log.error("New update has errors, NOT restarting (the old version keeps running):\n%s", "\n".join(bad))
+                    return
+                log.info("Restarting to load the new update")
+                await self.close()      # start.bat starts it again with the new code
+        except Exception:
+            log.exception("Update watcher failed")
+
+    def broken_files(self):
+        bad = []
+        for f in self.code_files():
+            if f.endswith(".py"):
+                try:
+                    with open(f, encoding="utf-8") as fh:
+                        compile(fh.read(), f, "exec")
+                except (SyntaxError, ValueError, UnicodeDecodeError) as e:
+                    bad.append(f"{os.path.relpath(f, ROOT)}: {e}")
+        return bad
+
     @auto_backup.before_loop
     async def _skip_first(self):
         await asyncio.sleep(60)
 
     async def close(self):
         self.auto_backup.cancel()
+        if self.watch_code.is_running():
+            self.watch_code.cancel()
         try:
             backup.make_backup(self.db, "shutdown")
         except Exception:

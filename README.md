@@ -52,6 +52,8 @@ Admins (Manage Server, or listed in `ADMIN_USER_IDS`):
 - `/admin settings` shows all of the above.
 - `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`, `/admin meteor`, `/admin tim`, `/admin cops`, `/admin testerror`.
 
+**Auto restart:** when new bot files are copied into the folder, the bot waits until they stop changing, checks the new code for errors, and restarts itself (start.bat brings it back and installs any new libraries). If the new code has an error it keeps the old version running and DMs you the error. `AUTO_RESTART=off` in `.env` turns this off; `/admin restart` always works.
+
 **Error reports:** any error gets written to `logs/errors.log` and DM'd to whoever owns the bot application (or the IDs in `ERROR_DM_USER_IDS`) as a text file. Send that file to Claude to get it fixed. `/admin testerror` sends a fake one to check it works.
 
 ## Running it on your PC

@@ -15,6 +15,8 @@ if not exist .env (
   exit /b
 )
 :loop
+rem picks up any new libraries an update needs (quick when nothing changed)
+.venv\Scripts\python -m pip install -q -r requirements.txt >nul 2>&1
 .venv\Scripts\python bot.py
 echo Bot stopped. Restarting in 5 seconds, close this window to quit.
 timeout /t 5 >nul
