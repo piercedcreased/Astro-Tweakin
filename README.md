@@ -92,7 +92,7 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 ## Update notes
 
 1. In each server run `/admin channel #channel` (or `/admin updatechannel #channel` for notes only). Servers without one post notes in their `/admin announce` channel instead, and servers with neither get none.
-2. Put any GIFs and images you like in the `update_images` folder. Each update post picks one at random (anything over Discord's 10 MB limit is skipped).
+2. Put any GIFs and images you like in the `update_images` folder. Each update post picks one at random and goes through all of them before repeating one (anything over Discord's 10 MB limit is skipped).
 
 **It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted in every server the next time the bot starts. Each server remembers what it already got, so nothing posts twice, and a server getting notes for the first time only gets the newest ones. The old single webhook (`updates/webhook.txt` or `UPDATE_WEBHOOK_URL`) is turned into its server's update channel automatically.
 

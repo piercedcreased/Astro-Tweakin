@@ -46,16 +46,36 @@ def mark_posted(path):
         f.write(os.path.basename(path) + "\n")
 
 
+USED_IMAGES = os.path.join(UPDATES, "images_used.txt")
+
+
 def image():
-    """A random image/GIF from update_images/ (skipping files too big for Discord)."""
-    gif = os.getenv("UPDATE_GIF")
-    if gif:
-        return gif if os.path.exists(gif) else None
+    """A random image/GIF from update_images/ (skipping files too big for Discord). Goes through every
+    picture before repeating one, so the same one doesn't keep coming up."""
+    pool = []
     if os.path.isdir(IMAGES):
-        pool = [os.path.join(IMAGES, f) for f in os.listdir(IMAGES)
-                if f.lower().endswith(IMAGE_TYPES) and os.path.getsize(os.path.join(IMAGES, f)) <= MAX_BYTES]
-        if pool:
-            return random.choice(pool)
+        pool = sorted(f for f in os.listdir(IMAGES)
+                      if f.lower().endswith(IMAGE_TYPES) and os.path.getsize(os.path.join(IMAGES, f)) <= MAX_BYTES)
+    if pool:
+        try:
+            with open(USED_IMAGES, encoding="utf-8") as f:
+                used = [line.strip() for line in f if line.strip()]
+        except OSError:
+            used = []
+        fresh = [f for f in pool if f not in used]
+        if not fresh:                                 # every picture has had a turn: start a new round
+            fresh = [f for f in pool if not used or f != used[-1]] or pool
+            used = []
+        pick = random.choice(fresh)
+        try:
+            with open(USED_IMAGES, "w", encoding="utf-8") as f:
+                f.write("\n".join(used + [pick]) + "\n")
+        except OSError:
+            pass
+        return os.path.join(IMAGES, pick)
+    gif = os.getenv("UPDATE_GIF")
+    if gif and os.path.exists(gif):
+        return gif
     for ext in ("gif", "png", "jpg", "jpeg", "webp"):     # older single-image setup
         p = os.path.join(ROOT, "assets", "update." + ext)
         if os.path.exists(p):
