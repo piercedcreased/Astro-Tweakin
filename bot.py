@@ -4,6 +4,7 @@ Run with start.bat on Windows, or: python bot.py
 """
 import asyncio
 import glob
+import json
 import logging
 import os
 import time
@@ -151,6 +152,60 @@ class AstroTweakin(commands.Bot):
         finally:
             await super().close()   # always disconnect, so bot.py exits and start.bat restarts it
 
+    # ------------------------------------------------------------ update notes in every server
+
+    def update_channel_id(self, gid):
+        """Where update notes go in a server: /admin updatechannel, else the /admin announce channel."""
+        return int(self.db.meta(f"updatechannel:{gid}") or 0) or self.db.announce_channel(gid)
+
+    def updates_posted(self, gid):
+        raw = self.db.meta(f"updates_posted:{gid}")
+        return set(json.loads(raw)) if raw else None
+
+    def mark_updates_posted(self, gid, names):
+        self.db.set_meta(f"updates_posted:{gid}", json.dumps(sorted((self.updates_posted(gid) or set()) | set(names))))
+
+    async def migrate_update_webhook(self):
+        """The old setup had one webhook for one server. Turn it into that server's update channel,
+        remembering what it already posted there."""
+        if self.db.meta("updates_migrated"):
+            return
+        url = updates.webhook_url()
+        if url:
+            try:
+                hook = await discord.Webhook.from_url(url, client=self).fetch()
+                if hook.guild_id and hook.channel_id and not self.db.meta(f"updatechannel:{hook.guild_id}"):
+                    self.db.set_meta(f"updatechannel:{hook.guild_id}", hook.channel_id)
+                    self.mark_updates_posted(hook.guild_id, updates.posted() or [])
+                    log.info("Moved the update webhook over to server %s", hook.guild_id)
+            except (discord.HTTPException, ValueError) as e:
+                log.warning("Couldn't read the old update webhook (%s); set channels with /admin updatechannel", e)
+        self.db.set_meta("updates_migrated", 1)
+
+    async def post_updates(self):
+        """Posts notes each server hasn't seen yet. A server seeing notes for the first time only gets
+        the newest ones, not the whole history."""
+        notes = updates.all_notes()
+        if not notes:
+            return
+        await self.migrate_update_webhook()
+        names = [os.path.basename(p) for p in notes]
+        for guild in self.guilds:
+            ch = guild.get_channel(self.update_channel_id(guild.id) or 0)
+            if ch is None:
+                continue
+            done = self.updates_posted(guild.id)
+            todo = notes[-1:] if done is None else [p for p in notes if os.path.basename(p) not in done]
+            for p in todo:
+                try:
+                    title = await updates.send(ch, p)
+                    log.info("Posted update notes %s in %s", title, guild.name)
+                except discord.HTTPException as e:
+                    log.warning("Couldn't post update notes in %s #%s: %s (needs Send Messages, Embed Links, Attach Files)",
+                                guild.name, ch.name, e)
+                    break
+                self.mark_updates_posted(guild.id, names if done is None else [os.path.basename(p)])
+
     async def channel_check(self, interaction):
         """If /admin botchannel set some channels, game commands only work there (admin commands work anywhere)."""
         if interaction.guild is None or (interaction.command and interaction.command.qualified_name.startswith("admin")):
@@ -190,8 +245,7 @@ class AstroTweakin(commands.Bot):
         if not getattr(self, "_posted_updates", False):
             self._posted_updates = True
             try:
-                for title in await asyncio.to_thread(updates.post_pending):
-                    log.info("Announced update: %s", title)
+                await self.post_updates()
             except Exception:
                 log.exception("Couldn't post update notes (the bot keeps running)")
         await self.change_presence(activity=discord.Game("/mine"))

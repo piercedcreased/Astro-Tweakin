@@ -1,8 +1,10 @@
-"""Update notes -> Discord webhook.
+"""Update notes.
 
 Drop a new file in updates/ (e.g. updates/0.2.0.md, first "# " line is the title).
-The next time the bot starts it posts every notes file it hasn't posted yet, with a random
-image or GIF from the update_images/ folder. Posted files are remembered in updates/posted.txt.
+The next time the bot starts it posts every notes file it hasn't posted yet in every server,
+with a random image or GIF from the update_images/ folder (see AstroTweakin.post_updates in bot.py).
+Each server posts in its /admin updatechannel channel, or its /admin announce channel if none is set.
+The webhook functions below are for tools/post_update.py and for moving the old single-webhook setup over.
 """
 import glob
 import json
@@ -10,6 +12,7 @@ import logging
 import os
 import random
 
+import discord
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,8 +24,14 @@ MAX_BYTES = 10 * 1024 * 1024       # Discord's upload limit for webhooks
 log = logging.getLogger("astro-tweakin.updates")
 
 
+def _version_key(path):
+    v = os.path.basename(path)[:-3]
+    return [int(x) if x.isdigit() else 0 for x in v.split(".")]
+
+
 def all_notes():
-    return sorted(glob.glob(os.path.join(UPDATES, "*.md")), key=os.path.getmtime)
+    """Every notes file, oldest version first."""
+    return sorted(glob.glob(os.path.join(UPDATES, "*.md")), key=_version_key)
 
 
 def posted():
@@ -111,6 +120,16 @@ def post(path):
     if r.status_code >= 300:
         raise RuntimeError(f"Discord said {r.status_code}: {r.text}")
     mark_posted(path)
+    return title
+
+
+async def send(channel, path):
+    """Posts one notes file in a Discord channel as the bot. Returns its title."""
+    title, payload, img, fname = build(path)
+    embed = discord.Embed.from_dict(payload["embeds"][0])
+    files = [discord.File(img, filename=fname)] if img else []
+    await channel.send(content=payload.get("content"), embed=embed, files=files,
+                       allowed_mentions=discord.AllowedMentions(everyone=True, roles=True))
     return title
 
 

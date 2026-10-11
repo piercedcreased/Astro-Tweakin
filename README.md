@@ -63,7 +63,7 @@ Meteors and Tim post in the channel set with `/admin announce` (or `ANNOUNCE_CHA
 Admins (Manage Server, or listed in `ADMIN_USER_IDS`):
 - `/admin botchannel` add/remove/clear: limit the game to certain channels.
 - `/admin announce`: channel for rare finds, meteors and Tweaker Tim.
-- `/admin updatechannel`: channel for update notes (the bot makes the webhook itself; needs Manage Webhooks).
+- `/admin updatechannel`: channel for update notes in that server (posts the latest notes there right away to check it works).
 - `/admin settings` shows all of the above.
 - `/admin event`, `/admin give`, `/admin backup`, `/admin restart`, `/admin preview`, `/admin meteor`, `/admin tim`, `/admin cops`, `/admin testerror`.
 
@@ -88,14 +88,14 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 4. In Discord turn on Developer Mode (Settings → Advanced), then right-click yourself → **Copy User ID** into `ADMIN_USER_IDS`.
 5. In your server run `/admin announce #channel` to pick where rare finds get shouted.
 
-## Update notes with a webhook
+## Update notes
 
-1. In your updates channel: ⚙️ Edit Channel → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**, and paste it into `UPDATE_WEBHOOK_URL` in `.env`.
+1. In each server run `/admin updatechannel #channel`. Servers without one post notes in their `/admin announce` channel instead, and servers with neither get none.
 2. Put any GIFs and images you like in the `update_images` folder. Each update post picks one at random (anything over Discord's 10 MB limit is skipped).
 
-**It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted by the bot the next time it starts. Posted files are remembered in `updates/posted.txt`, so nothing posts twice. To restart without touching the PC, use `/admin restart` in Discord.
+**It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted in every server the next time the bot starts. Each server remembers what it already got, so nothing posts twice, and a server getting notes for the first time only gets the newest ones. The old single webhook (`updates/webhook.txt` or `UPDATE_WEBHOOK_URL`) is turned into its server's update channel automatically.
 
-To post one by hand, double-click `post_update.bat` (it posts the newest notes) or run `post_update.bat updates\0.1.0.md`.
+To post one by hand through the old webhook, double-click `post_update.bat` (it posts the newest notes) or run `post_update.bat updates\0.1.0.md`.
 
 ## Keeping player data safe
 

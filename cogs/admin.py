@@ -1,6 +1,7 @@
 """Owner/admin commands: announce channel, server luck events, giving coins, testing reveals."""
 import io
 import logging
+import os
 
 import discord
 from discord import app_commands
@@ -138,16 +139,21 @@ class Admin(commands.Cog):
     @group.command(name="updatechannel", description="Choose the channel where update notes get posted")
     @admin_only
     async def updatechannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        try:
-            hook = await channel.create_webhook(name="Astro Tweakin Updates", reason="Update notes channel set with /admin updatechannel")
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "I need the **Manage Webhooks** permission in that channel. Give the bot's role that permission and try again.",
-                ephemeral=True)
-            return
-        updates.set_webhook_url(hook.url)
-        await interaction.response.send_message(f"✅ Update notes will now post in {channel.mention}. "
-                                                "(This replaces the webhook in .env.)", ephemeral=True)
+        gid = interaction.guild.id
+        await interaction.response.defer(ephemeral=True)
+        notes = updates.all_notes()
+        if notes:
+            try:
+                await updates.send(channel, notes[-1])
+            except discord.HTTPException:
+                await interaction.followup.send(
+                    f"I can't post in {channel.mention}. Give the bot **Send Messages**, **Embed Links** and "
+                    "**Attach Files** there and try again.", ephemeral=True)
+                return
+        self.db.set_meta(f"updatechannel:{gid}", channel.id)
+        self.bot.mark_updates_posted(gid, [os.path.basename(p) for p in notes])
+        await interaction.followup.send(f"✅ Update notes will now post in {channel.mention}"
+                                        + (" (I just posted the latest ones there)." if notes else "."), ephemeral=True)
 
     @group.command(name="settings", description="Show where the bot posts and which channels it works in")
     @admin_only
@@ -155,7 +161,10 @@ class Admin(commands.Cog):
         gid = interaction.guild.id
         chans = self.db.bot_channels(gid)
         ann = self.db.announce_channel(gid) or self.bot.default_announce
-        hook = "set" if updates.webhook_url() else "not set (use /admin updatechannel)"
+        upd = self.db.meta(f"updatechannel:{gid}")
+        own_ann = self.db.announce_channel(gid)
+        hook = f"<#{upd}>" if upd else (f"<#{own_ann}> (the announce channel; /admin updatechannel to change)" if own_ann
+                                       else "Not set (/admin updatechannel)")
         e = discord.Embed(title="⚙️ Astro Tweakin settings", color=discord.Color.blurple())
         e.add_field(name="Game works in", value=", ".join(f"<#{c}>" for c in chans) or "Every channel (/admin botchannel)", inline=False)
         e.add_field(name="Rare finds, meteors, Tweaker Tim", value=f"<#{ann}>" if ann else "Not set (/admin announce)", inline=False)
