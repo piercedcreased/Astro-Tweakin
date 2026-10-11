@@ -61,6 +61,7 @@ Mutated ores show in a 🧬 Mutations section of the inventory, can be locked, s
 Meteors and Tim post in the channel set with `/admin announce` (or `ANNOUNCE_CHANNEL_ID`). Without one they don't appear.
 
 Admins (Manage Server, or listed in `ADMIN_USER_IDS`):
+- `/admin channel #channel`: **the easy one.** Puts everything in that channel: the game, rare finds, meteors, Tweaker Tim and update notes.
 - `/admin botchannel` add/remove/clear: limit the game to certain channels.
 - `/admin announce`: channel for rare finds, meteors and Tweaker Tim.
 - `/admin updatechannel`: channel for update notes in that server (posts the latest notes there right away to check it works).
@@ -90,7 +91,7 @@ To start it when Windows boots: press `Win+R`, type `shell:startup`, and put a s
 
 ## Update notes
 
-1. In each server run `/admin updatechannel #channel`. Servers without one post notes in their `/admin announce` channel instead, and servers with neither get none.
+1. In each server run `/admin channel #channel` (or `/admin updatechannel #channel` for notes only). Servers without one post notes in their `/admin announce` channel instead, and servers with neither get none.
 2. Put any GIFs and images you like in the `update_images` folder. Each update post picks one at random (anything over Discord's 10 MB limit is skipped).
 
 **It's automatic from here.** Every new notes file in `updates/` (like `updates/0.2.0.md`, where the first `# ` line is the title) gets posted in every server the next time the bot starts. Each server remembers what it already got, so nothing posts twice, and a server getting notes for the first time only gets the newest ones. The old single webhook (`updates/webhook.txt` or `UPDATE_WEBHOOK_URL`) is turned into its server's update channel automatically.

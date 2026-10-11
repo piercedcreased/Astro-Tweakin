@@ -32,7 +32,7 @@ class Admin(commands.Cog):
 
     group = app_commands.Group(name="admin", description="Astro Tweakin admin tools")
 
-    @group.command(name="announce", description="Set the channel where rare finds get announced")
+    @group.command(name="announce", description="Set the channel for rare finds, meteors and Tweaker Tim")
     @admin_only
     async def announce(self, interaction: discord.Interaction, channel: discord.TextChannel):
         self.db.set_announce_channel(interaction.guild.id, channel.id)
@@ -136,24 +136,42 @@ class Admin(commands.Cog):
         await interaction.response.send_message(f"✅ Game commands now work in: {where}. (/admin commands work anywhere.)",
                                                 ephemeral=True)
 
-    @group.command(name="updatechannel", description="Choose the channel where update notes get posted")
-    @admin_only
-    async def updatechannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+    async def _set_update_channel(self, interaction, channel):
+        """Saves the update channel and posts the latest notes there if this server hasn't had them.
+        Returns an error message, or None when it worked."""
         gid = interaction.guild.id
-        await interaction.response.defer(ephemeral=True)
         notes = updates.all_notes()
-        if notes:
+        if notes and os.path.basename(notes[-1]) not in (self.bot.updates_posted(gid) or set()):
             try:
                 await updates.send(channel, notes[-1])
             except discord.HTTPException:
-                await interaction.followup.send(
-                    f"I can't post in {channel.mention}. Give the bot **Send Messages**, **Embed Links** and "
-                    "**Attach Files** there and try again.", ephemeral=True)
-                return
+                return (f"I can't post in {channel.mention}. Give the bot **Send Messages**, **Embed Links** and "
+                        "**Attach Files** there and try again.")
         self.db.set_meta(f"updatechannel:{gid}", channel.id)
         self.bot.mark_updates_posted(gid, [os.path.basename(p) for p in notes])
-        await interaction.followup.send(f"✅ Update notes will now post in {channel.mention}"
-                                        + (" (I just posted the latest ones there)." if notes else "."), ephemeral=True)
+        return None
+
+    @group.command(name="channel", description="Put everything in one channel: the game, rare finds, meteors, Tim and update notes")
+    @admin_only
+    async def channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        await interaction.response.defer(ephemeral=True)
+        err = await self._set_update_channel(interaction, channel)
+        if err:
+            await interaction.followup.send(err, ephemeral=True)
+            return
+        gid = interaction.guild.id
+        self.db.set_bot_channels(gid, [channel.id])
+        self.db.set_announce_channel(gid, channel.id)
+        await interaction.followup.send(
+            f"✅ Everything now happens in {channel.mention}: the game, rare finds, meteors, Tweaker Tim and update notes. "
+            "Game commands won't work in other channels (/admin commands still work anywhere).", ephemeral=True)
+
+    @group.command(name="updatechannel", description="Choose the channel where update notes get posted")
+    @admin_only
+    async def updatechannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        await interaction.response.defer(ephemeral=True)
+        err = await self._set_update_channel(interaction, channel)
+        await interaction.followup.send(err or f"✅ Update notes will now post in {channel.mention}.", ephemeral=True)
 
     @group.command(name="settings", description="Show where the bot posts and which channels it works in")
     @admin_only
