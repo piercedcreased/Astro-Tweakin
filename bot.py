@@ -114,7 +114,9 @@ class AstroTweakin(commands.Bot):
                     log.error("New update has errors, NOT restarting (the old version keeps running):\n%s", "\n".join(bad))
                     return
                 log.info("Restarting to load the new update")
-                await self.close()      # start.bat starts it again with the new code
+                # close from its own task: close() stops this loop, and stopping the loop from inside
+                # itself cancelled the shutdown halfway (save closed, bot never exited, no restart)
+                self.restart_task = asyncio.get_running_loop().create_task(self.close())
         except Exception:
             log.exception("Update watcher failed")
 
@@ -134,15 +136,20 @@ class AstroTweakin(commands.Bot):
         await asyncio.sleep(60)
 
     async def close(self):
-        self.auto_backup.cancel()
-        if self.watch_code.is_running():
-            self.watch_code.cancel()
+        if getattr(self, "_shutting_down", False):
+            return await super().close()
+        self._shutting_down = True
         try:
-            backup.make_backup(self.db, "shutdown")
-        except Exception:
-            log.exception("Shutdown backup failed")
-        self.db.close()
-        await super().close()
+            self.auto_backup.cancel()
+            if self.watch_code.is_running():
+                self.watch_code.cancel()
+            try:
+                backup.make_backup(self.db, "shutdown")
+            except Exception:
+                log.exception("Shutdown backup failed")
+            self.db.close()
+        finally:
+            await super().close()   # always disconnect, so bot.py exits and start.bat restarts it
 
     async def channel_check(self, interaction):
         """If /admin botchannel set some channels, game commands only work there (admin commands work anywhere)."""
