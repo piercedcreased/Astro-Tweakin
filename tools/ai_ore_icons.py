@@ -5,6 +5,7 @@ ComfyUI has to be running first (LOCALAI\\Start-ComfyUI.bat or "Start AI Studio.
     python -m tools.ai_ore_icons                  # 2 versions of every ore -> assets/ore_drafts
     python -m tools.ai_ore_icons diamond sunshard # only these ores
     python -m tools.ai_ore_icons --tries 4        # more versions to pick from
+    python -m tools.ai_ore_icons --fresh gold     # more versions of an ore, after the ones already made
     python -m tools.ai_ore_icons --keep           # copy version 1 of each draft into assets/ores (the game uses those)
 
 Drafts go to assets/ore_drafts/<ore>_<n>.png plus a contact sheet (_sheet.png) so you can pick.
@@ -62,7 +63,7 @@ DESC = {
     "deepglass": "a dark blue glassy crystal shard",
     "slime_pearl": "a round glossy lime green slime pearl",
     "silver": "a shiny silver ore nugget",
-    "gold": "a shiny gold nugget",
+    "gold": "a lumpy irregular raw gold nugget with bumps and crevices, metallic shine",
     "quartz": "a cluster of clear white quartz crystals",
     "jade": "a polished green jade gemstone",
     "amethyst": "a cluster of purple amethyst crystals",
@@ -79,17 +80,17 @@ DESC = {
     "prismara": "a hot pink rainbow prism gem splitting light into rainbows",
     "chrono_crystal": "a golden crystal with a tiny clock face frozen inside",
     "nebulite": "a purple orb containing a swirling galaxy nebula",
-    "starforged_core": "a blazing white-gold star core forged from a dying star",
+    "starforged_core": "a glowing spherical star core of white-hot plasma inside a cracked golden metal cage",
     "slug_kings_crown": "a golden royal crown with gems, topped with a little slug",
     "eternium": "a pure white eternal star gem of infinite light",
-    "golden_slug": "a cute shiny solid gold slug with big eyes",
+    "golden_slug": "a cute shiny solid gold garden slug, long soft body, two eye stalks on its head, slime trail, side view",
     "blue_crystal": "a small plastic zip baggie full of glowing blue crystal shards",
     "moon_dust": "a chunk of pale grey cratered moon rock covered in dust",
     "dark_regolith": "a dark grey lunar regolith rock chunk",
-    "helium3": "a glowing light blue bubble orb of helium-3 gas",
+    "helium3": "a glass sphere canister filled with glowing light blue swirling gas",
     "moon_cheese": "a wedge of yellow cheese with craters like the moon",
     "lunar_titanium": "a bluish-grey titanium metal ore chunk",
-    "flag_scrap": "a torn scrap of a red white and blue flag on a broken metal pole",
+    "flag_scrap": "a torn faded scrap of the american stars and stripes flag, dusty and crumpled",
     "selenite": "a pale white translucent selenite crystal wand",
     "lunar_pearl": "a large glowing pearly white pearl shaped like a full moon",
     "moonstone_prime": "a cut periwinkle blue gem with a crescent moon inside",
@@ -102,8 +103,8 @@ DESC = {
     "phobos_shard": "a lumpy grey potato-shaped moon rock shard",
     "olympus_ruby": "a large cut blood red ruby shaped like a volcano",
     "red_giant_garnet": "a deep crimson garnet gem glowing like a red giant star",
-    "martian_fossil": "a bone-coloured fossil of a weird alien creature in sandstone",
-    "k_dust": "a pile of white powder on a credit card with a little red mars planet logo",
+    "martian_fossil": "a slab of tan sandstone rock with the fossil skeleton of a weird tentacled alien creature imprinted in it",
+    "k_dust": "a small pile of white powder lying on top of a red plastic credit card",
     "spore_soil": "a clump of dark purple soil with tiny mushrooms sprouting",
     "mycelium_mat": "a fuzzy cream white mat of fungus mycelium",
     "glowcap_spores": "a pile of glowing teal mushroom spores",
@@ -116,7 +117,7 @@ DESC = {
     "cosmic_shroom": "a trippy psychedelic purple mushroom with swirling galaxy patterns",
     "sugar_sand": "a pile of sparkly white sugar crystals",
     "rock_candy": "a pink rock candy crystal cluster",
-    "gumdrops": "a few green sugar-coated gumdrop candies",
+    "gumdrops": "three green dome-shaped gumdrop candies covered in sugar crystals",
     "jawbreaker": "a round red jawbreaker candy ball",
     "lollipop_crystal": "a hot pink crystal shaped like a swirly lollipop",
     "taffy_ore": "a twisted chunk of light blue saltwater taffy",
@@ -191,7 +192,8 @@ def tidy(img, size=512):
     return sq.resize((size, size), Image.LANCZOS)
 
 
-def sheet(keys, tries):
+def sheet(keys):
+    tries = max(len([f for f in os.listdir(DRAFTS) if f.startswith(k + "_") and f[len(k) + 1:-4].isdigit()]) for k in keys)
     cell = 200
     out = Image.new("RGB", (cell * (tries + 1), cell * len(keys)), (25, 22, 30))
     d = ImageDraw.Draw(out)
@@ -217,6 +219,7 @@ def main(argv):
         tries = int(argv[i + 1])
         del argv[i:i + 2]
     keep = "--keep" in argv
+    fresh = "--fresh" in argv        # make new versions after the ones already there
     keys = [a for a in argv if not a.startswith("--")] or [o.key for o in ORES]
     bad = [k for k in keys if k not in ORE_BY_KEY]
     if bad:
@@ -236,7 +239,10 @@ def main(argv):
     wf = load_workflow()
     for k in keys:
         ore = ORE_BY_KEY[k]
-        for n in range(1, tries + 1):
+        start = 1
+        while fresh and os.path.exists(os.path.join(DRAFTS, f"{k}_{start}.png")):
+            start += 1
+        for n in range(start, start + tries):
             path = os.path.join(DRAFTS, f"{k}_{n}.png")
             if os.path.exists(path):
                 continue
@@ -244,7 +250,7 @@ def main(argv):
             pid = queue(wf, prompt_for(ore), random.randint(1, 2**31), f"astro_tweakin/{k}")
             tidy(wait_for(pid)).save(path)
             print(f"{k}_{n}  {time.time() - t:.0f}s", flush=True)
-    sheet(keys, tries)
+    sheet(keys)
     print("done, contact sheet:", os.path.join(DRAFTS, "_sheet.png"))
 
 
