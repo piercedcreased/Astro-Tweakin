@@ -659,8 +659,8 @@ class Game(commands.Cog):
                 await interaction.followup.send(text, ephemeral=True)
             else:
                 await interaction.response.send_message(text, ephemeral=True)
-        except discord.HTTPException:
-            pass
+        except (discord.HTTPException, RuntimeError):
+            pass        # RuntimeError: the bot is restarting and its connection is already closed
 
     async def dispatch_action(self, interaction, action, uid):
         if action.startswith(("smeltall_", "smeltone_")) and action[9:] in data.BARS:
