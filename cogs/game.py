@@ -32,6 +32,42 @@ def mut_file(ore, mut, name="ore.png"):
     return discord.File(io.BytesIO(images.mutated_thumb(ore, mut.key)), filename=name)
 
 
+class Pic:
+    """An image for a panel that is only uploaded when it changed. key names what's in the picture: if the
+    message already shows that picture, the existing attachment is kept instead of uploading it again."""
+
+    def __init__(self, name, key, make):
+        self.name, self.key, self.make = name, key, make
+
+    def file(self):
+        return discord.File(io.BytesIO(self.make()), filename=self.name)
+
+
+def as_files(files):
+    """Panel files ready to send in a new message."""
+    return [f.file() if isinstance(f, Pic) else f for f in files]
+
+
+def ore_pic(ore):
+    return Pic("ore.png", ore.key, lambda: images.ore_thumb(ore))
+
+
+def mut_pic(ore, mut):
+    return Pic("ore.png", f"{ore.key}:{mut.key}", lambda: images.mutated_thumb(ore, mut.key))
+
+
+def depth_pic(layer_num):
+    return Pic("depth.jpg", f"depth{layer_num}", lambda: images.depth_banner(layer_num))
+
+
+def find_line(key):
+    """A rarest-find entry ('ore:x' or 'mut:shiny:x') as a line of text."""
+    o, m = engine.find_label(key)
+    if m:
+        return f"{m.emoji} **{m.name} {o.name}**  ·  {fmt_chance(engine.find_score(o, m))}"
+    return ore_line(o)
+
+
 def mut_line(ore, mut):
     return f"{mut.emoji} **{mut.name} {ore.name}**! (1 in {mut.chance:,} mutation, x{mut.mult} value)"
 
@@ -106,10 +142,13 @@ class Game(commands.Cog):
         self.db = bot.db
         self.next_swing = {}
         self.locks = collections.defaultdict(asyncio.Lock)
-        self.thumbs = {}          # message id -> ore key whose picture is already attached there
+        self.attached = {}        # message id -> {filename: picture key} of what that panel message shows
         self.bg_tasks = set()
 
     # ------------------------------------------------------------ panels
+
+    BUFF_NAMES = {"luck": "🍀 Luck", "rolls": "⛏️ Double Dig", "echo": "🔁 Echo Swing", "sell": "💰 Midas Touch",
+                  "mutluck": "🧬 Mutation Magnet", "snack_luck": "🧃 Snack Luck", "nocops": "🧴 Cop Repellent"}
 
     def status_text(self, user):
         uid = user["id"]
@@ -117,19 +156,18 @@ class Game(commands.Cog):
         layer = LAYERS[user["layer"] - 1]
         luck = engine.luck_for(self.db, user)
         title = space.title_of(user)
+        buffs = self.db.buffs(uid)
         lines = [f"🏷️ *{title}*"] if title else []
         lines += [
             f"💰 **{user['coins']:,}** coins",
             f"{layer.realm_info.emoji} {layer.realm_info.name}  ·  {layer.planet_info.emoji} **{layer.planet_info.name}**  ·  🕳️ {layer.name}",
             f"⛏️ {pick.name}",
-            f"🍀 Luck **x{luck.total:,.2f}**  ·  ⏱️ {engine.cooldown_for(self.db, user):.2g}s  ·  {engine.rolls_for(self.db, user)} ore/swing",
+            f"🍀 Luck **x{luck.total:,.2f}**  ·  {engine.rolls_for(self.db, user, buffs)} ore/swing",
         ]
-        buffs = self.db.buffs(uid)
+        buffs = {k: v for k, v in buffs.items() if k in self.BUFF_NAMES}
         if buffs:
-            names = {"luck": "🍀 Luck", "haste": "⚡ Haste", "rolls": "⛏️ Double Dig", "snack_luck": "🧃 Snack Luck",
-                     "nocops": "🧴 Cop Repellent"}
             lines.append("✨ " + "  ·  ".join(
-                f"{names.get(k, k)}{'' if k == 'nocops' else f' x{a:g}'} ({fmt_time(e - time.time())})"
+                f"{self.BUFF_NAMES[k]}{'' if k == 'nocops' else f' x{a:g}'} ({fmt_time(e - time.time())})"
                 for k, (a, e) in buffs.items()))
         ev = self.db.event()
         if ev:
@@ -142,27 +180,29 @@ class Game(commands.Cog):
             lines.append(f"🐌 {user['sluglings']} slugling(s) have dug **{n:,}** ore for you")
         return "\n".join(lines)
 
-    def main_view(self, user):
+    def bounties_ready(self, uid):
+        """How many of today's bounties are finished but not cashed in yet."""
+        try:
+            return sum(1 for r in space.bounties(self.db, uid)
+                       if not r["claimed"] and space.bounty_progress(self.db, r) >= r["need"])
+        except Exception:
+            log.exception("Couldn't count ready bounties for %s", uid)
+            return 0
+
+    def main_view(self, user, ready=0):
         uid = user["id"]
         v = discord.ui.View(timeout=None)
         roll_wait = engine.lucky_roll_ready(user)
         v.add_item(B("mine", uid, "Mine", "⛏️", discord.ButtonStyle.success))
         v.add_item(B("roll", uid, "Lucky Roll" if roll_wait <= 0 else f"Roll in {fmt_time(roll_wait)}", "🎰",
                      discord.ButtonStyle.primary, disabled=roll_wait > 0))
-        v.add_item(B("sell", uid, "Sell", "💰"))
         v.add_item(B("collect", uid, "Collect", "🐌", disabled=user["sluglings"] == 0))
-        v.add_item(B("shop", uid, "Shop", "🛒", row=1))
+        v.add_item(B("mines", uid, "Mines", "🕳️", row=1))
         v.add_item(B("inv", uid, "Inventory", "🎒", row=1))
-        v.add_item(B("up", uid, "Up", "⬆️", disabled=user["layer"] <= 1, row=1))
-        v.add_item(B("down", uid, "Down", "⬇️", disabled=user["layer"] >= len(LAYERS), row=1))
-        on = bool(user["autosell"])
-        v.add_item(B("autosell", uid, f"Auto-sell: {'ON' if on else 'OFF'}", "♻️",
-                     discord.ButtonStyle.success if on else discord.ButtonStyle.secondary, row=1))
-        v.add_item(B("ship", uid, "Ship", "🚀", row=2))
-        v.add_item(B("bounties", uid, "Bounties", "📜", row=2))
-        v.add_item(B("snacks", uid, "Snacks", "🍬", row=2))
-        v.add_item(B("trophies", uid, "Achievements", "🏆", row=2))
-        v.add_item(B("lb", uid, "Leaderboard", "📊", row=2))
+        v.add_item(B("shop", uid, "Shop", "🛒", row=1))
+        v.add_item(B("player", uid, f"Player ({ready} ready!)" if ready else "Player", "👤",
+                     discord.ButtonStyle.success if ready else discord.ButtonStyle.secondary, row=1))
+        v.add_item(B("settings", uid, None, "⚙️", row=1))
         return v
 
     def main_panel(self, uid, headline=None, ores=None, note=None, muts=None):
@@ -176,23 +216,92 @@ class Game(commands.Cog):
             e.description = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in
                                       sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance))
             e.color = color_of(best.tier_info.color) if best.tier != "common" else e.color
-            # the picture is only uploaded when the best ore changes (see show()), so this stays fast
+            # pictures are only uploaded when they change (see show()), so this stays fast
             if muts:
                 mo, mm = rarest_mut(muts)
                 e.description = "\n".join(mut_line(o, m) for o, m in muts) + "\n" + e.description
                 e.color = color_of(mm.color)
-                files.append(mut_file(mo, mm))
+                files.append(mut_pic(mo, mm))
             else:
-                files.append(ore_file(best))
+                files.append(ore_pic(best))
             e.set_thumbnail(url="attachment://ore.png")
         elif headline is None:
             e.description = f"*{layer.blurb}*\nHit **Mine** to swing your pickaxe."
         if headline:
             e.description = headline + ("\n" + e.description if e.description else "")
+        ready = self.bounties_ready(uid)
+        if ready:
+            e.description = (e.description or "") + f"\n\n📜 **{ready} bounty{' is' if ready == 1 else 'ies are'} ready to claim!** (👤 Player → Bounties)"
         if note:
             e.add_field(name="​", value=note, inline=False)
         e.add_field(name="Status", value=self.status_text(user), inline=False)
-        return e, files, self.main_view(user)
+        files.append(depth_pic(layer.num))
+        e.set_image(url="attachment://depth.jpg")
+        return e, files, self.main_view(user, ready)
+
+    def mines_panel(self, uid, note=None):
+        """Pick which cave layer to mine in (replaces the old Up/Down buttons)."""
+        user = self.db.user(uid)
+        lines = []
+        for L in LAYERS:
+            if L.num <= user["max_layer"]:
+                mark = "📍" if L.num == user["layer"] else "✅"
+                lines.append(f"{mark} **{L.num}.** {engine.layer_label(L)}  ·  x{L.luck:g} luck")
+            elif L.num == user["max_layer"] + 1:
+                lines.append(f"🔒 **{L.num}.** {engine.layer_label(L)}  ·  {L.cost:,} coins to unlock")
+            else:
+                lines.append(f"🔒 **{L.num}.** ???")
+        e = discord.Embed(title="🕳️ Mines", color=color_of(LAYERS[user["layer"] - 1].color),
+                          description=(note + "\n\n" if note else "") + "\n".join(lines))
+        e.set_footer(text="Pick a layer below to go there. Unlocking a new one also needs materials (see the Shop).")
+        v = discord.ui.View(timeout=None)
+        opts = [discord.SelectOption(label=f"{L.num}. {L.planet_info.name} · {L.name}"[:100], value=str(L.num),
+                                     emoji=L.planet_info.emoji, default=L.num == user["layer"])
+                for L in LAYERS[:user["max_layer"]]]
+        v.add_item(PanelSelect("minesgo", uid, opts, "🕳️ Go to layer...", row=0, max_values=1))
+        if user["max_layer"] < len(LAYERS):
+            nxt = LAYERS[user["max_layer"]]
+            verb = "Warp to" if engine.is_new_realm(nxt) else "Launch to" if engine.is_new_planet(nxt) else "Dig to"
+            v.add_item(B("minesdig", uid, f"{verb} {nxt.name}"[:80], "🔓", discord.ButtonStyle.success, row=1))
+        v.add_item(B("back", uid, "Back", "↩️", row=1))
+        return e, [], v
+
+    def player_panel(self, uid, note=None):
+        user = self.db.user(uid)
+        stats = self.db.stats(uid)
+        ready = self.bounties_ready(uid)
+        e = discord.Embed(title=f"👤 {user['name']}", color=discord.Color.green(), description=note)
+        if space.title_of(user):
+            e.description = (note + "\n" if note else "") + f"🏷️ *{space.title_of(user)}*"
+        e.add_field(name="Coins", value=f"{user['coins']:,}")
+        e.add_field(name="Ores mined", value=f"{user['total_mined']:,}")
+        e.add_field(name="Rebirths", value=str(user["rebirths"]))
+        e.add_field(name="Index", value=f"{len(self.db.discovered(uid))}/{len(data.ORES)}")
+        e.add_field(name="Achievements", value=f"{len(space.unlocked(self.db, uid))}/{len(data.ACHIEVEMENTS)}")
+        e.add_field(name="Bounties done", value=f"{stats.get('bounties_done', 0):,}")
+        if user["best_find"]:
+            e.add_field(name="Rarest find", value=find_line(user["best_find"]), inline=False)
+        if ready:
+            e.add_field(name="📜 Bounties", value=f"**{ready}** ready to claim!", inline=False)
+        v = discord.ui.View(timeout=None)
+        v.add_item(B("bounties", uid, f"Bounties ({ready} ready!)" if ready else "Bounties", "📜",
+                     discord.ButtonStyle.success if ready else discord.ButtonStyle.secondary))
+        v.add_item(B("trophies", uid, "Achievements", "🏆"))
+        v.add_item(B("lb", uid, "Leaderboard", "📊"))
+        v.add_item(B("back", uid, "Back", "↩️"))
+        return e, [], v
+
+    def settings_panel(self, uid, note=None):
+        user = self.db.user(uid)
+        on = bool(user["autosell"])
+        e = discord.Embed(title="⚙️ Settings", color=discord.Color.dark_grey(), description=(note + "\n\n" if note else "") + (
+            f"♻️ **Auto-sell: {'ON' if on else 'OFF'}**\nSells common and uncommon ores as you mine them. "
+            "Rarer ores, mutations, locked items and anything your next pickaxe or planet needs are always kept."))
+        v = discord.ui.View(timeout=None)
+        v.add_item(B("autosell", uid, f"Auto-sell: {'ON' if on else 'OFF'}", "♻️",
+                     discord.ButtonStyle.success if on else discord.ButtonStyle.secondary))
+        v.add_item(B("back", uid, "Back", "↩️"))
+        return e, [], v
 
     def shop_panel(self, uid, note=None):
         user = self.db.user(uid)
@@ -202,7 +311,7 @@ class Game(commands.Cog):
             mats = ", ".join(f"{q}x {engine.item_name(i)} (have {self.db.qty(uid, i)})" for i, q in nxt.materials.items())
             e.add_field(name=f"⛏️ Craft: {nxt.name}",
                         value=f"{nxt.price:,} coins" + (f" + {mats}" if mats else "") +
-                              f"\nLuck x{nxt.luck} · {nxt.cooldown}s · {nxt.rolls} ore/swing", inline=False)
+                              f"\nLuck x{nxt.luck} · {nxt.rolls} ore/swing", inline=False)
         else:
             e.add_field(name="⛏️ Pickaxe", value="You own the best pickaxe.", inline=False)
         go_label, go_emoji = "Dig deeper", "🕳️"
@@ -233,8 +342,9 @@ class Game(commands.Cog):
         v.add_item(B("smelter", uid, "Smelter", "🔥"))
         v.add_item(B("workshop", uid, "Workshop", "🔧", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
-        banner = images.shop_banner(user["coins"], engine.goals(self.db, uid), nxt)
-        files = [discord.File(io.BytesIO(banner), filename="shop.jpg")]
+        goals = engine.goals(self.db, uid)
+        key = f"shop:{user['coins']}:{nxt.key if nxt else ''}:{goals}"
+        files = [Pic("shop.jpg", key, lambda: images.shop_banner(user["coins"], goals, nxt))]
         e.set_image(url="attachment://shop.jpg")
         return e, files, v
 
@@ -275,15 +385,23 @@ class Game(commands.Cog):
         v.add_item(B("shop", uid, "Back to shop", "↩️", row=2))
         return e, [], v
 
+    @staticmethod
+    def _known(item):
+        try:
+            engine.item_name(item)
+            return True
+        except (KeyError, ValueError):
+            return False
+
     def inventory_panel(self, uid, note=None):
         user = self.db.user(uid)
-        items = self.db.items(uid)
+        items = {k: q for k, q in self.db.items(uid).items() if self._known(k)}
         locked = self.db.locked(uid)
         lk = lambda item: "🔒" if item in locked else ""
         e = discord.Embed(title=f"🎒 {user['name']}'s Inventory", color=discord.Color.dark_teal(), description=note)
         by_tier = collections.defaultdict(list)
         worth = 0
-        mult = engine.sell_mult(user)
+        mult = engine.sell_mult(user, self.db)
         for item, q in items.items():
             kind, key = item.split(":", 1)
             if kind == "ore":
@@ -310,12 +428,22 @@ class Game(commands.Cog):
                 e.add_field(name=name, value=val[:1024], inline=False)
         if not items:
             e.description = "Empty. Go mine something!"
-        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell keeps Epic+ ores, mutations, bars and pickaxe materials · "
-                          f"🔒 locked items are never sold")
+        e.set_footer(text=f"Worth about {int(worth * mult):,} coins · Sell junk keeps Epic+ ores, mutations, bars and "
+                          f"pickaxe materials · 🔒 locked items are never sold")
         v = discord.ui.View(timeout=None)
-        v.add_item(B("sell", uid, "Sell", "💰", discord.ButtonStyle.success))
-        v.add_item(B("sellall", uid, "Sell everything (except locked)", "⚠️", discord.ButtonStyle.danger))
+        v.add_item(B("sellsafe", uid, "Sell junk", "💰", discord.ButtonStyle.success))
+        v.add_item(B("sellall", uid, "Sell everything...", "⚠️", discord.ButtonStyle.danger))
+        v.add_item(B("snacks", uid, "Snacks", "🍬"))
+        v.add_item(B("ship", uid, "Ship", "🚀"))
         v.add_item(B("back", uid, "Back", "↩️"))
+        sellable = [(i, q) for i, q in items.items() if i.split(":", 1)[0] in ("ore", "bar", "mut") and i not in locked]
+        if sellable:
+            # commonest first: that's usually what you want gone
+            sellable.sort(key=lambda kv: self._rank(kv[0]))
+            opts = [discord.SelectOption(label=f"{engine.item_name(i)} x{q:,}"[:100], value=i,
+                                         description=f"Sell all for about {int(engine.item_value(i) * q * mult):,} coins"[:100])
+                    for i, q in sellable[:25]]
+            v.add_item(PanelSelect("sellpick", uid, opts, "💰 Pick exactly what to sell..."[:150], row=1))
         opts = []
         for item, q in sorted(items.items(), key=lambda kv: -self._rank(kv[0])):
             if item.split(":", 1)[0] not in ("ore", "bar", "mut"):
@@ -325,7 +453,19 @@ class Game(commands.Cog):
                                              description="Locked. Pick to unlock" if on else "Pick to lock (never sold)"))
         if opts:
             more = " (rarest 25 shown, /lock for the rest)" if len(opts) > 25 else ""
-            v.add_item(PanelSelect("lockpick", uid, opts, f"🔒 Lock or unlock items...{more}"[:150], row=1))
+            v.add_item(PanelSelect("lockpick", uid, opts, f"🔒 Lock or unlock items...{more}"[:150], row=2))
+        return e, [], v
+
+    def sellall_confirm_panel(self, uid):
+        user = self.db.user(uid)
+        e = discord.Embed(title="⚠️ Sell everything?", color=discord.Color.red(), description=(
+            "This sells **every** ore, mutation and bar you have, including Epic+ ores and mutations. "
+            "Only 🔒 locked items and what your next pickaxe or planet needs are kept.\n\n"
+            "Use **Pick exactly what to sell** in your Inventory if you only want some of it gone."))
+        e.set_footer(text=f"You have {user['coins']:,} coins")
+        v = discord.ui.View(timeout=None)
+        v.add_item(B("sellallyes", uid, "Yes, sell everything", "⚠️", discord.ButtonStyle.danger))
+        v.add_item(B("inv", uid, "Cancel", "↩️"))
         return e, [], v
 
     @staticmethod
@@ -345,23 +485,71 @@ class Game(commands.Cog):
             await interaction.response.send_message("Those buttons belong to someone else. Use `/mine` to open your own.",
                                                     ephemeral=True)
             return
+        if interaction.guild and not await self.bot.channel_allowed(interaction):
+            return
         self.db.user(uid, interaction.user.display_name)
         sp = self.bot.get_cog("Space")
         if sp and sp.busy(uid) and not action.startswith("cc_"):
             await interaction.response.send_message("🚔 The Space Authority is searching your ship! Deal with them first.",
                                                     ephemeral=True)
             return
-        async with self.locks[uid]:
+        lock = self.locks[uid]
+        if lock.locked() and action == "mine":
+            # still busy with your last press: drop this one quietly instead of queueing it
+            await self.ack(interaction)
+            return
+        dog = asyncio.create_task(self._watchdog(interaction, action))
+        try:
+            async with lock:
+                try:
+                    await self.dispatch_action(interaction, action, uid)
+                    if sp:
+                        await sp.after_action(interaction, uid)
+                except NotEnough:
+                    await self.oops(interaction, "You don't have enough for that anymore. Nothing was taken.")
+                except discord.NotFound as e:
+                    # 10062 = Discord gave up waiting for the answer (the click shows "interaction failed")
+                    log.warning("Button '%s' for %s expired before it was answered: %s", action, uid, e)
+                    self.db.log_usage(interaction.guild_id, uid, "expired", action)
+                except Exception:
+                    log.exception("Button '%s' failed for %s (%s) in #%s", action, interaction.user.display_name, uid,
+                                  getattr(interaction.channel, "name", "?"))
+                    await self.oops(interaction, "Something went wrong. Your progress is safe.")
+        finally:
+            dog.cancel()
+
+    @staticmethod
+    def _rlock(interaction):
+        return interaction.extras.setdefault("respond_lock", asyncio.Lock())
+
+    async def ack(self, interaction):
+        """Answers a press without changing anything (only if nothing answered it yet)."""
+        async with self._rlock(interaction):
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer()
+                except discord.HTTPException:
+                    pass
+
+    async def _watchdog(self, interaction, action):
+        """Discord only waits 3 seconds for an answer. If a press is still busy after 2, answer it now
+        (as "working on it") so it never shows "This interaction failed"; the panel edit lands right after."""
+        await asyncio.sleep(2.0)
+        async with self._rlock(interaction):
+            if interaction.response.is_done():
+                return
             try:
-                await self.dispatch_action(interaction, action, uid)
-                if sp:
-                    await sp.after_action(interaction, uid)
-            except NotEnough:
-                await self.oops(interaction, "You don't have enough for that anymore. Nothing was taken.")
-            except Exception:
-                log.exception("Button '%s' failed for %s (%s) in #%s", action, interaction.user.display_name, uid,
-                              getattr(interaction.channel, "name", "?"))
-                await self.oops(interaction, "Something went wrong. Your progress is safe, nothing was changed.")
+                await interaction.response.defer()
+            except discord.HTTPException:
+                return
+        self.db.log_usage(interaction.guild_id, interaction.user.id, "slow", action)
+
+    async def edit_panel(self, interaction, **kwargs):
+        """Edits the panel message, whether or not the press was already answered."""
+        async with self._rlock(interaction):
+            if interaction.response.is_done():
+                return await interaction.edit_original_response(**kwargs)
+            await interaction.response.edit_message(**kwargs)
 
     async def oops(self, interaction, text):
         try:
@@ -386,37 +574,50 @@ class Game(commands.Cog):
             return
         sp = self.bot.get_cog("Space")
         if not (sp and await sp.dispatch(interaction, action, uid)):
-            await interaction.response.defer()
+            await self.ack(interaction)
 
-    async def show(self, interaction, panel, thumb=None):
-        """Edits the panel message. thumb = the ore whose picture the panel shows; if that picture is
-        already on the message it isn't uploaded again (that upload was most of a mine click's lag)."""
+    async def show(self, interaction, panel):
+        """Edits the panel message. Pictures (Pic) the message already shows are kept as they are instead of
+        being uploaded again; that upload used to be most of a click's lag."""
         e, files, v = panel
-        mid = interaction.message.id if interaction.message else None
-        if thumb and mid and self.thumbs.get(mid) == thumb:
-            await interaction.response.edit_message(embed=e, view=v)
-            return
-        await interaction.response.edit_message(embed=e, attachments=files, view=v)
+        msg = interaction.message
+        mid = msg.id if msg else None
+        had = self.attached.get(mid, {}) if mid else {}
+        current = {a.filename: a for a in (msg.attachments if msg else [])}
+        out, keys, changed = [], {}, False
+        for f in files:
+            if isinstance(f, Pic):
+                if had.get(f.name) == f.key and f.name in current:
+                    out.append(current[f.name])
+                else:
+                    out.append(await asyncio.to_thread(f.file))
+                    changed = True
+                keys[f.name] = f.key
+            else:
+                out.append(f)
+                keys[f.filename] = None
+                changed = True
+        if set(current) != set(keys):
+            changed = True
+        kwargs = {"embed": e, "view": v}
+        if changed:
+            kwargs["attachments"] = out
+        await self.edit_panel(interaction, **kwargs)
         if mid:
-            if len(self.thumbs) > 5000:
-                self.thumbs.clear()
-            self.thumbs[mid] = thumb
+            if len(self.attached) > 5000:
+                self.attached.clear()
+            self.attached[mid] = keys
 
     async def do_mine(self, interaction, uid):
         wait = self.next_swing.get(uid, 0) - time.time()
         if wait > 0:
-            await interaction.response.defer()   # too fast: quietly ignore the click, no popup
+            await self.ack(interaction)   # too fast: quietly ignore the click, no popup
             return
         user = self.db.user(uid)
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)
         res = engine.swing(self.db, uid)
         head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
-        panel = self.main_panel(uid, headline=head, ores=res.ores, muts=res.mutations)
-        thumb = None
-        if panel[1]:
-            mo_mm = rarest_mut(res.mutations)
-            thumb = f"{mo_mm[0].key}:{mo_mm[1].key}" if mo_mm else res.best.key
-        await self.show(interaction, panel, thumb=thumb)
+        await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores, muts=res.mutations))
         await self.celebrate(interaction, res.best, res.mutations)
         sp = self.bot.get_cog("Space")
         if sp:
@@ -449,7 +650,7 @@ class Game(commands.Cog):
     async def _post_reveal(self, interaction, ore, mut=None):
         tier = ore.tier_info
         name = interaction.user.display_name
-        gif = await asyncio.to_thread(images.reveal_gif, ore, name, None, mut)
+        gif = await asyncio.to_thread(images.reveal_gif, ore, name, None, mut, interaction.user.name)
         if mut:
             text = (f"{mut.emoji} **{name}** found a **{mut.name.upper()} {ore.name.upper()}**! "
                     f"(1 in {mut.chance:,} mutation, worth x{mut.mult})")
@@ -470,6 +671,8 @@ class Game(commands.Cog):
                     except discord.HTTPException:
                         pass
 
+    ROLL_HOLD = 4.5   # seconds the reel stays up before the buttons come back
+
     async def do_roll(self, interaction, uid):
         user = self.db.user(uid)
         if engine.lucky_roll_ready(user) > 0:
@@ -478,37 +681,63 @@ class Game(commands.Cog):
             return
         prize = engine.pick_prize()
         msg_text = engine.apply_prize(self.db, uid, prize)
-        # the reel plays inside the /mine panel itself (no extra message), then the panel comes back with the prize
-        await interaction.response.defer()
         gif = await asyncio.to_thread(images.reel_gif, prize)
         e = discord.Embed(title=f"🎰 {interaction.user.display_name}'s Lucky Roll", description="Rolling...",
                           color=color_of(prize.color))
         e.set_image(url="attachment://roll.gif")
+        # the reel plays inside the /mine panel itself (no extra message), with the buttons hidden
+        await self.edit_panel(interaction, embed=e, view=None,
+                              attachments=[discord.File(io.BytesIO(gif), filename="roll.gif")])
         mid = interaction.message.id if interaction.message else None
         if mid:
-            self.thumbs[mid] = "roll"   # the next panel edit must replace these attachments, not keep them
-        try:
-            await interaction.edit_original_response(embed=e, view=None,
-                                                     attachments=[discord.File(io.BytesIO(gif), filename="roll.gif")])
-            await asyncio.sleep(2.2)
-            e2, _, v = self.main_panel(uid, headline=f"🎰 {msg_text}")
-            e2.color = color_of(prize.color)
-            e2.set_image(url="attachment://prize.png")
-            await interaction.edit_original_response(
-                embed=e2, view=v, attachments=[discord.File(io.BytesIO(images.prize_card(prize)), filename="prize.png")])
-        except discord.HTTPException:
-            pass
+            self.attached[mid] = {"roll.gif": "roll"}
+        # finish in the background so the user's lock isn't held while the reel spins
+        task = asyncio.create_task(self._finish_roll(interaction, uid, prize, msg_text))
+        self.bg_tasks.add(task)
+        task.add_done_callback(self.bg_tasks.discard)
 
-    async def do_sell(self, interaction, uid, keep_rare=True):
-        sold, coins = engine.sell_all(self.db, uid, keep_rare)
-        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else "Nothing to sell (Epic+ ores, mutations, bars and pickaxe materials are kept)."
-        await self.show(interaction, self.main_panel(uid, headline=note))
+    async def _finish_roll(self, interaction, uid, prize, msg_text):
+        """Brings the panel back under the reel. The GIF stays on the message (it ends on the prize), so a slow
+        connection that only just loaded it still sees it spin and land instead of having it swapped out."""
+        await asyncio.sleep(self.ROLL_HOLD)
+        try:
+            async with self.locks[uid]:
+                e, _, v = self.main_panel(uid, headline=f"🎰 {msg_text}")
+                e.color = color_of(prize.color)
+                e.set_image(url="attachment://roll.gif")
+                msg = await interaction.original_response()
+                keep = [a for a in msg.attachments if a.filename == "roll.gif"]
+                await interaction.edit_original_response(embed=e, view=v, attachments=keep)
+        except discord.HTTPException as ex:
+            log.warning("Couldn't bring the panel back after a Lucky Roll for %s: %s", uid, ex)
+
+    async def do_sell(self, interaction, uid):
+        # old panels still have a Sell button under Mine: it now opens the Inventory instead of selling
+        await self.do_inv(interaction, uid)
+
+    async def do_sellsafe(self, interaction, uid):
+        sold, coins = engine.sell_all(self.db, uid, True)
+        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else \
+            "Nothing to sell (Epic+ ores, mutations, bars and pickaxe materials are kept)."
+        await self.show(interaction, self.inventory_panel(uid, note=note))
 
     async def do_sellall(self, interaction, uid):
-        await self.do_sell(interaction, uid, keep_rare=False)
+        await self.show(interaction, self.sellall_confirm_panel(uid))
+
+    async def do_sellallyes(self, interaction, uid):
+        sold, coins = engine.sell_all(self.db, uid, keep_rare=False)
+        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else "Nothing to sell."
+        await self.show(interaction, self.inventory_panel(uid, note=note))
+
+    async def do_sellpick(self, interaction, uid):
+        sold, coins, skipped = engine.sell_items(self.db, uid, interaction.extras.get("values", []))
+        note = f"💰 Sold **{sold:,}** items for **{coins:,}** coins." if sold else "Nothing was sold."
+        if skipped:
+            note += "\nKept: " + ", ".join(skipped)
+        await self.show(interaction, self.inventory_panel(uid, note=note))
 
     async def do_collect(self, interaction, uid):
-        ores, elapsed, muts = engine.collect_sluglings(self.db, uid)
+        ores, elapsed, muts = await self.collect_off_loop(uid)
         if not ores:
             await self.show(interaction, self.main_panel(uid, headline="🐌 Your sluglings haven't dug anything yet. Give them a minute."))
             return
@@ -526,18 +755,46 @@ class Game(commands.Cog):
         e, files, v = self.main_panel(uid, headline=head)
         e.set_thumbnail(url="attachment://ore.png")
         bm = rarest_mut(muts)
-        if bm:
-            await self.show(interaction, (e, [mut_file(*bm)], v), thumb=f"{bm[0].key}:{bm[1].key}")
-        else:
-            await self.show(interaction, (e, [ore_file(best)], v), thumb=best.key)
+        await self.show(interaction, (e, [mut_pic(*bm) if bm else ore_pic(best)] + files, v))
         await self.celebrate(interaction, best, muts)
+
+    async def collect_off_loop(self, uid):
+        """A big Collect rolls tens of thousands of ores (fast: it uses a plain random generator)."""
+        return engine.collect_sluglings(self.db, uid)
 
     async def do_autosell(self, interaction, uid):
         on = engine.toggle_autosell(self.db, uid)
-        msg = ("♻️ **Auto-sell is ON.** Common and uncommon ores get sold as you mine them. "
-               "Rarer ores and anything you need for your next pickaxe or planet are kept.") if on \
-            else "♻️ **Auto-sell is OFF.** Ores stay in your bag until you sell them."
+        await self.show(interaction, self.settings_panel(uid, note=f"♻️ Auto-sell is now **{'ON' if on else 'OFF'}**."))
+
+    async def do_settings(self, interaction, uid):
+        await self.show(interaction, self.settings_panel(uid))
+
+    async def do_player(self, interaction, uid):
+        await self.show(interaction, self.player_panel(uid))
+
+    async def do_mines(self, interaction, uid):
+        await self.show(interaction, self.mines_panel(uid))
+
+    async def do_minesgo(self, interaction, uid):
+        try:
+            num = int((interaction.extras.get("values") or ["0"])[0])
+        except ValueError:
+            num = 0
+        ok, msg = engine.travel(self.db, uid, num)
+        if ok:
+            await self.show(interaction, self.main_panel(uid, headline=msg))
+        else:
+            await self.show(interaction, self.mines_panel(uid, note="❌ " + msg))
+
+    async def do_minesdig(self, interaction, uid):
+        ok, msg = engine.unlock_next(self.db, uid)
+        if not ok:
+            await self.show(interaction, self.mines_panel(uid, note="❌ " + msg))
+            return
         await self.show(interaction, self.main_panel(uid, headline=msg))
+        sp = self.bot.get_cog("Space")
+        if sp and engine.is_new_planet(LAYERS[self.db.user(uid)["layer"] - 1]):
+            await sp.maybe_check(interaction, uid, travel=True)
 
     async def do_shop(self, interaction, uid):
         await self.show(interaction, self.shop_panel(uid))
@@ -552,6 +809,7 @@ class Game(commands.Cog):
         await self.show(interaction, self.main_panel(uid))
 
     async def do_up(self, interaction, uid):
+        # old panels only: Up/Down became the Mines menu
         ok, msg = engine.ascend(self.db, uid)
         await self.show(interaction, self.main_panel(uid, headline=msg))
 
@@ -612,7 +870,7 @@ class Game(commands.Cog):
     async def mine(self, interaction: discord.Interaction):
         self.db.user(interaction.user.id, interaction.user.display_name)
         e, files, v = self.main_panel(interaction.user.id)
-        await interaction.response.send_message(embed=e, files=files, view=v)
+        await interaction.response.send_message(embed=e, files=as_files(files), view=v)
 
     @app_commands.command(name="profile", description="See someone's mining stats")
     async def profile(self, interaction: discord.Interaction, member: discord.Member = None):
@@ -637,10 +895,10 @@ class Game(commands.Cog):
             e.add_field(name=f"🧬 Mutations ({stats['mutations']:,})", inline=False, value=" · ".join(
                 f"{m.emoji} {stats.get('mut_' + m.key, 0):,}" for m in reversed(data.MUTATIONS)))
         files = []
-        if user["best_ore"]:
-            best = ORE_BY_KEY[user["best_ore"]]
-            e.add_field(name="Rarest find", value=ore_line(best), inline=False)
-            files.append(ore_file(best))
+        if user["best_find"]:
+            o, m = engine.find_label(user["best_find"])
+            e.add_field(name="Rarest find", value=find_line(user["best_find"]), inline=False)
+            files.append(mut_file(o, m) if m else ore_file(o))
             e.set_thumbnail(url="attachment://ore.png")
         await interaction.response.send_message(embed=e, files=files)
 
@@ -677,7 +935,7 @@ class Game(commands.Cog):
             await interaction.response.send_message(msg, ephemeral=True)
             return
         e, files, v = self.main_panel(uid, headline=msg)
-        await interaction.response.send_message(embed=e, files=files, view=v)
+        await interaction.response.send_message(embed=e, files=as_files(files), view=v)
 
     @travel.autocomplete("place")
     async def travel_autocomplete(self, interaction, current: str):
@@ -754,9 +1012,10 @@ class Game(commands.Cog):
             key = lambda r: (r["rebirths"], r["max_layer"])
             fmt = lambda r: engine.layer_label(LAYERS[r["max_layer"] - 1]) + (f" · {r['rebirths']} rebirths" if r["rebirths"] else "")
         elif by == "best":
-            rows = [r for r in rows if r["best_ore"] in ORE_BY_KEY]
-            key = lambda r: ORE_BY_KEY[r["best_ore"]].chance
-            fmt = lambda r: ore_line(ORE_BY_KEY[r["best_ore"]])
+            # counts mutations too: a Galactic Coal can beat a plain Diamond
+            rows = [r for r in rows if r["best_find"] and self._known(r["best_find"])]
+            key = lambda r: r["best_score"]
+            fmt = lambda r: find_line(r["best_find"])
         else:
             vals = {"index": lambda: count("discovered"), "trophies": lambda: count("achievements"),
                     "raids": lambda: stat("raids_won"), "duels": lambda: stat("duels_won"),
@@ -783,7 +1042,7 @@ class Game(commands.Cog):
         opts = [discord.SelectOption(label=label.split(" ", 1)[1], emoji=label.split(" ", 1)[0], value=k, default=k == by)
                 for k, label in self.LB_KINDS.items()]
         v.add_item(PanelSelect("lbpick", uid, opts, "Pick a leaderboard...", row=0, max_values=1))
-        v.add_item(B("back", uid, "Back", "↩️", row=1))
+        v.add_item(B("player", uid, "Back", "↩️", row=1))
         return e, [], v
 
     async def do_lb(self, interaction, uid):
@@ -842,11 +1101,17 @@ class Game(commands.Cog):
 
     @app_commands.command(name="help", description="How to play Astro Tweakin")
     async def help(self, interaction: discord.Interaction):
-        e = discord.Embed(title="🚀 Astro Tweakin", color=discord.Color.green(), description=(
-            "**/mine** opens your mine. Everything is buttons from there.\n\n"
+        await interaction.response.send_message(embed=self.help_embed(), ephemeral=True)
+
+    @staticmethod
+    def help_embed():
+        return discord.Embed(title="🚀 Astro Tweakin", color=discord.Color.green(), description=(
+            "**/mine** (or **;mine**) opens your mine. Everything is buttons from there.\n\n"
             "⛏️ **Mine** rolls for ores. Each ore has a 1-in-N chance, and luck divides N.\n"
             "🎰 **Lucky Roll** spins a reel every 10 minutes for a short boost.\n"
-            "💰 **Sell** ores for coins. 🔥 **Smelt** them into bars in the shop.\n"
+            "🕳️ **Mines** picks which cave layer you dig in. 🎒 **Inventory** is where you sell, lock, eat snacks "
+            "and fly your ship. 👤 **Player** has bounties, achievements and the leaderboard. ⚙️ has auto-sell.\n"
+            "💰 **Sell** ores for coins in your Inventory. 🔥 **Smelt** them into bars in the shop.\n"
             "🛒 **Shop**: craft pickaxes, dig deeper, hire sluglings.\n"
             "🔧 **Workshop**: build rocket parts from ores, then 🚀 launch to new planets and 🌀 warp to new realms.\n"
             "🐌 **Sluglings** dig while you're offline. Hit **Collect** to bank it.\n"
@@ -863,8 +1128,88 @@ class Game(commands.Cog):
             "get a special animation and get announced to the server.\n"
             "🧬 Any ore can come out **mutated**: ✨ Shiny, ☢️ Radioactive, 🌑 Shadow, 🌈 Holographic, 🌌 Galactic or "
             "🌀 Tweaked, worth x3 up to x150. Regular Sell keeps them.\n"
-            "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**"))
-        await interaction.response.send_message(embed=e, ephemeral=True)
+            "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**\n\n"
+            "⌨️ **Chat commands** with `;`: `;mine` `;inv` `;shop` `;mines` `;player` `;bal` `;daily` `;bounties` "
+            "`;snacks` `;ship` `;lb` `;help`"))
+
+    # ------------------------------------------------------------ ; chat commands
+
+    async def cog_check(self, ctx):
+        """; commands follow /admin botchannel like the slash commands do."""
+        if ctx.guild is None:
+            return True
+        allowed = self.db.bot_channels(ctx.guild.id)
+        return not allowed or ctx.channel.id in allowed
+
+    async def _send_panel(self, ctx, panel):
+        e, files, v = panel
+        await ctx.send(embed=e, files=as_files(files), view=v)
+
+    def _me(self, ctx):
+        return self.db.user(ctx.author.id, ctx.author.display_name)["id"]
+
+    @commands.command(name="mine", aliases=["m"])
+    async def p_mine(self, ctx):
+        await self._send_panel(ctx, self.main_panel(self._me(ctx)))
+
+    @commands.command(name="inv", aliases=["i", "inventory", "bag"])
+    async def p_inv(self, ctx):
+        await self._send_panel(ctx, self.inventory_panel(self._me(ctx)))
+
+    @commands.command(name="shop", aliases=["s"])
+    async def p_shop(self, ctx):
+        await self._send_panel(ctx, self.shop_panel(self._me(ctx)))
+
+    @commands.command(name="mines", aliases=["layers", "travel"])
+    async def p_mines(self, ctx):
+        await self._send_panel(ctx, self.mines_panel(self._me(ctx)))
+
+    @commands.command(name="player", aliases=["p", "profile", "me"])
+    async def p_player(self, ctx):
+        await self._send_panel(ctx, self.player_panel(self._me(ctx)))
+
+    @commands.command(name="bal", aliases=["b", "coins", "balance"])
+    async def p_bal(self, ctx):
+        user = self.db.user(self._me(ctx))
+        await ctx.reply(f"💰 You have **{user['coins']:,}** coins.", mention_author=False)
+
+    @commands.command(name="daily", aliases=["d"])
+    async def p_daily(self, ctx):
+        ok, msg = engine.claim_daily(self.db, self._me(ctx))
+        await ctx.reply(embed=discord.Embed(title="📅 Daily Reward", description=msg,
+                                            color=discord.Color.green() if ok else discord.Color.dark_grey()),
+                        mention_author=False)
+
+    @commands.command(name="lb", aliases=["leaderboard", "top"])
+    async def p_lb(self, ctx):
+        await self._send_panel(ctx, self.leaderboard_panel(self._me(ctx)))
+
+    @commands.command(name="bounties", aliases=["bounty"])
+    async def p_bounties(self, ctx):
+        await self._send_panel(ctx, self.bot.get_cog("Space").bounty_panel(self._me(ctx)))
+
+    @commands.command(name="snacks", aliases=["snack"])
+    async def p_snacks(self, ctx):
+        await self._send_panel(ctx, self.bot.get_cog("Space").snack_panel(self._me(ctx)))
+
+    @commands.command(name="ship")
+    async def p_ship(self, ctx):
+        await self._send_panel(ctx, self.bot.get_cog("Space").ship_panel(self._me(ctx)))
+
+    @commands.command(name="help", aliases=["h"])
+    async def p_help(self, ctx):
+        await ctx.reply(embed=self.help_embed(), mention_author=False)
+
+    async def cog_command_error(self, ctx, error):
+        if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
+            return
+        original = getattr(error, "original", error)
+        log.error("; command %s failed for %s (%s)", ctx.command, ctx.author.display_name, ctx.author.id,
+                  exc_info=(type(original), original, original.__traceback__))
+        try:
+            await ctx.reply("Something went wrong. Your progress is safe.", mention_author=False)
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot):

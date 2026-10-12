@@ -29,9 +29,18 @@ def _ids(value):
     return {int(x) for x in (value or "").replace(" ", "").split(",") if x}
 
 
+PREFIX = os.getenv("COMMAND_PREFIX") or ";"
+
+
 class AstroTweakin(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
+    def __init__(self, chat_commands=True):
+        intents = discord.Intents.default()
+        # ; chat commands need to read messages. That's a "privileged intent": if it isn't switched on in the
+        # Discord developer portal, the bot starts without chat commands instead of not starting at all.
+        intents.message_content = chat_commands
+        super().__init__(command_prefix=commands.when_mentioned_or(PREFIX), intents=intents, help_command=None,
+                         case_insensitive=True)
+        self.chat_commands = chat_commands
         # always next to bot.py, so starting it from another folder can't create an empty new save
         self.db = DB(os.path.join(ROOT, os.getenv("DB_PATH", "astro_tweakin.db")))
         self.admin_ids = _ids(os.getenv("ADMIN_USER_IDS"))
@@ -49,6 +58,10 @@ class AstroTweakin(commands.Bot):
         self.auto_backup.change_interval(minutes=float(os.getenv("BACKUP_EVERY_MINUTES") or 30))
         self.auto_backup.start()
         self.db.start_flusher()
+        from game import engine
+        engine.retire_old_snacks(self.db)
+        engine.backfill_best_finds(self.db)
+        self.db.prune_usage()
         self.code_stamp = self.code_files_stamp()
         self.code_changed_at = None
         if (os.getenv("AUTO_RESTART") or "on").lower() not in ("off", "0", "false", "no"):
@@ -208,14 +221,47 @@ class AstroTweakin(commands.Bot):
 
     async def channel_check(self, interaction):
         """If /admin botchannel set some channels, game commands only work there (admin commands work anywhere)."""
-        if interaction.guild is None or (interaction.command and interaction.command.qualified_name.startswith("admin")):
+        if interaction.guild is None or (interaction.command and interaction.command.qualified_name.startswith(("admin", "alcad"))):
             return True
-        allowed = self.db.bot_channels(interaction.guild.id)
+        return await self.channel_allowed(interaction)
+
+    async def channel_allowed(self, interaction):
+        """Same rule for panel buttons: a /mine panel posted before /admin botchannel was set stops working
+        outside the game channels too."""
+        allowed = self.db.bot_channels(interaction.guild.id) if interaction.guild else []
         if not allowed or interaction.channel_id in allowed:
             return True
         where = " or ".join(f"<#{c}>" for c in allowed[:5])
         await interaction.response.send_message(f"🚀 Astro Tweakin only works in {where}. Head over there!", ephemeral=True)
         return False
+
+    # ------------------------------------------------------------ usage stats for /alcad
+
+    async def on_interaction(self, interaction):
+        try:
+            if interaction.type == discord.InteractionType.application_command:
+                kind, action = "slash", "/" + (interaction.command.qualified_name if interaction.command
+                                               else interaction.data.get("name", "?"))
+            elif interaction.type == discord.InteractionType.component:
+                parts = (interaction.data.get("custom_id") or "").split(":")
+                kind, action = "button", parts[1] if len(parts) > 1 else parts[0]
+            else:
+                return
+            self.db.log_usage(interaction.guild_id, interaction.user.id, kind, action)
+        except Exception:
+            log.exception("Couldn't record usage")
+
+    async def on_command(self, ctx):
+        try:
+            self.db.log_usage(ctx.guild.id if ctx.guild else None, ctx.author.id, "chat", PREFIX + ctx.command.qualified_name)
+        except Exception:
+            log.exception("Couldn't record usage")
+
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
+            return
+        if ctx.cog is None or ctx.cog.has_error_handler() is False:
+            log.error("; command failed: %s", error)
 
     async def on_app_command_error(self, interaction, error):
         if isinstance(error, discord.app_commands.CheckFailure):
@@ -259,4 +305,12 @@ if __name__ == "__main__":
         bot = AstroTweakin()
     except CorruptDatabase as e:
         raise SystemExit(str(e))
-    bot.run(token, log_handler=None)
+    try:
+        bot.run(token, log_handler=None)
+    except discord.PrivilegedIntentsRequired:
+        log.warning("Message Content Intent is off in the Discord developer portal, so ; chat commands are "
+                    "disabled. Turn it on under Bot > Privileged Gateway Intents to use them.")
+        bot.db.close()
+        logging.getLogger().removeHandler(bot.reporter)
+        bot = AstroTweakin(chat_commands=False)
+        bot.run(token, log_handler=None)

@@ -14,13 +14,14 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 
 ## Playing
 
-`/mine` opens your mine. Everything else is buttons.
+`/mine` (or `;mine`) opens your mine. Everything else is buttons, grouped into menus: 🕳️ Mines, 🎒 Inventory, 🛒 Shop, 👤 Player and ⚙️ Settings.
 
 | | |
 |---|---|
 | ⛏️ Mine | Rolls for ores. Each ore has a "1 in N" chance and your luck divides N. |
-| 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, haste or double dig. |
-| 💰 Sell | Sells ores. Keeps Epic+ ores, bars and the materials for your next pickaxe. |
+| 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, Midas Touch (sell value), Mutation Magnet, or Echo Swing (2x mines). |
+| 🕳️ Mines | Pick which unlocked cave layer to dig in, or unlock the next one. |
+| 💰 Sell | Lives in 🎒 Inventory only: Sell junk (keeps Epic+ ores, mutations, bars and upgrade materials), a picker to sell exactly what you choose, or Sell everything (asks first). |
 | 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt everything, or fenced. |
 | 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars. |
 | 🔧 Workshop | Build rocket parts (fuel, hull, nav computer, oxygen, warp core...) from ores. |
@@ -28,6 +29,10 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | `/rebirth` | "Burn the lab down" at Slug Core with 50M coins: reset for +50% luck and +25% sell value forever. |
 
 Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/leaderboard`, `/help`.
+
+**Chat commands** start with `;` (change it with `COMMAND_PREFIX` in `.env`): `;mine ;inv ;shop ;mines ;player ;bal ;daily ;lb ;bounties ;snacks ;ship ;help`. They need **Message Content Intent** switched on in the Discord developer portal (Bot → Privileged Gateway Intents); without it the bot still starts, just without `;` commands.
+
+**Owner tools:** `/alcad` (owners only, hidden from everyone without Administrator) shows usage stats across your servers (most-used commands and buttons, most active players and what they use, per server, or one member with `member:`) and the error log with `show: errors`. Owners are `ADMIN_USER_IDS` in `.env` or the bot's owner in the developer portal. `/admin give`, `event`, `meteor`, `tim`, `cops`, `backup` and `restart` are owners-only too, since every server shares one save.
 
 **Smuggler's Run (v0.3.0)**
 

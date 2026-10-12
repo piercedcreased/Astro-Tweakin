@@ -10,6 +10,7 @@ from . import data
 from .data import ORE_BY_KEY, PICKAXE_BY_KEY, PICKAXES, LAYERS, PRIZES, PART_BY_KEY, PARTS
 
 rng = random.SystemRandom()
+fast_rng = random.Random()     # for bulk rolls (slugling collects): SystemRandom is ~10x slower per draw
 
 
 def atomic(fn):
@@ -52,17 +53,18 @@ def _true_odds():
 SHOWN_ODDS = _true_odds()
 
 
-def roll_ore(layer, luck):
+def roll_ore(layer, luck, rand=None):
     """Roblox-RNG style roll: try each ore from rarest to most common.
 
     Each ore hits with chance luck / N, so a "1 in 10,000,000" ore really is
     1 in 10M at 1x luck and 1 in 1M at 10x luck.
     """
     pool = _POOLS[layer]
+    rand = (rand or rng).random
     for ore in pool[:-1]:
         # luck only boosts uncommon-and-up, so commons keep their normal mix
         boost = luck if ore.chance >= 50 else 1.0
-        if rng.random() * ore.chance < boost:
+        if rand() * ore.chance < boost:
             return ore
     return pool[-1]
 
@@ -94,23 +96,46 @@ def luck_for(db, user, base=1.0):
 
 
 def cooldown_for(db, user):
-    cd = PICKAXE_BY_KEY[user["pickaxe"]].cooldown
-    haste = db.buffs(user["id"]).get("haste")
-    if haste:
-        cd *= haste[0]
-    return cd
+    return PICKAXE_BY_KEY[user["pickaxe"]].cooldown
 
 
-def rolls_for(db, user):
+def rolls_for(db, user, buffs=None):
+    """Ores per Mine press: the pickaxe's rolls, x2 with Double Dig, x2 again with Echo Swing."""
     r = PICKAXE_BY_KEY[user["pickaxe"]].rolls
-    dbl = db.buffs(user["id"]).get("rolls")
-    if dbl:
-        r = int(r * dbl[0])
+    buffs = db.buffs(user["id"]) if buffs is None else buffs
+    for kind in ("rolls", "echo"):
+        if buffs.get(kind):
+            r = int(r * buffs[kind][0])
     return r
 
 
-def sell_mult(user):
-    return 1 + data.REBIRTH_SELL * user["rebirths"]
+def sell_mult(user, db=None):
+    """Rebirth sell bonus, plus Midas Touch from the Lucky Roll when db is given."""
+    m = 1 + data.REBIRTH_SELL * user["rebirths"]
+    if db is not None:
+        midas = db.buffs(user["id"]).get("sell")
+        if midas:
+            m *= midas[0]
+    return m
+
+
+def mutation_mult(db, uid):
+    b = db.buffs(uid).get("mutluck")
+    return b[0] if b else 1.0
+
+
+def find_score(ore, mut=None):
+    """How rare a find is, as the N in 1-in-N. A mutated ore counts the ore's odds times the mutation's."""
+    n = SHOWN_ODDS.get(ore.key, ore.chance)
+    return n * mut.chance if mut else n
+
+
+def find_label(key):
+    """'ore:gold' or 'mut:shiny:gold' -> (Ore, Mutation or None)"""
+    if key.startswith("mut:"):
+        m, o = split_mut(key[4:])
+        return o, m
+    return ORE_BY_KEY[key.split(":", 1)[-1]], None
 
 
 @dataclass
@@ -122,10 +147,11 @@ class SwingResult:
     mutations: list = field(default_factory=list)   # [(ore, mutation)]
 
 
-def roll_mutation():
+def roll_mutation(mult=1.0, rand=None):
     """Each found ore has a small chance to be mutated (rarest mutation checked first)."""
+    rand = (rand or rng).random
     for m in data.MUTATIONS:
-        if rng.random() * m.chance < 1:
+        if rand() * m.chance < mult:
             return m
     return None
 
@@ -140,7 +166,7 @@ def split_mut(key):
     return data.MUT_BY_KEY[m], ORE_BY_KEY[o]
 
 
-def record_finds(db, uid, ores, mutations=None):
+def record_finds(db, uid, ores, mutations=None, rand=None):
     """Adds found ores to the bag. Mutated ones are stored separately; they're appended to `mutations`
     as (ore, mutation) if a list is passed in."""
     counts = {}
@@ -149,8 +175,9 @@ def record_finds(db, uid, ores, mutations=None):
     for key, n in counts.items():
         db.discover(uid, key, n)
     found_muts = []
+    mm = mutation_mult(db, uid)
     for o in ores:
-        m = roll_mutation()
+        m = roll_mutation(mm, rand)
         if m:
             found_muts.append((o, m))
             counts[o.key] -= 1
@@ -169,6 +196,13 @@ def record_finds(db, uid, ores, mutations=None):
     fields = {"total_mined": user["total_mined"] + len(ores)}
     if prev is None or best.chance > prev.chance:
         fields["best_ore"] = best.key
+    # rarest find counting mutations (the leaderboard and /profile use this one)
+    top_key, top = "ore:" + best.key, find_score(best)
+    for o, m in found_muts:
+        if find_score(o, m) > top:
+            top_key, top = "mut:" + mut_item(o, m)[4:], find_score(o, m)
+    if top > (user["best_score"] or 0):
+        fields["best_find"], fields["best_score"] = top_key, top
     db.set(uid, **fields)
     rare = data.TIER_ORDER.index("rare")
     db.bump(uid, "found_rare", sum(1 for o in ores if data.TIER_ORDER.index(o.tier) >= rare))
@@ -280,7 +314,7 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
     """Sells ores. Epic+ ores and bars are kept unless keep_rare is False.
     max_tier (used by auto-sell) only sells ores up to that tier and never bars."""
     user = db.user(uid)
-    mult = sell_mult(user)
+    mult = sell_mult(user, db)
     total = 0
     sold = 0
     cap = data.TIER_ORDER.index(max_tier) if max_tier else None
@@ -323,6 +357,96 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
     db.run("UPDATE users SET coins = coins + ?, total_earned = total_earned + ? WHERE id=?", total, total, uid)
     db.bump(uid, "sold_coins", total)
     return sold, total
+
+
+@atomic
+def sell_items(db, uid, items):
+    """Sells every one of the picked items (the Inventory sell picker). Locked items are skipped,
+    and so is whatever your next pickaxe or planet still needs. Returns (sold, coins, skipped names)."""
+    user = db.user(uid)
+    mult = sell_mult(user, db)
+    locked = db.locked(uid)
+    needs = next_pick_needs(user)
+    total = sold = 0
+    skipped = []
+    for item in dict.fromkeys(items):
+        kind, _, key = item.partition(":")
+        qty = db.qty(uid, item)
+        if qty <= 0 or kind not in ("ore", "mut", "bar"):
+            continue
+        try:
+            name = item_name(item)
+        except KeyError:
+            continue
+        if item in locked:
+            skipped.append(f"🔒 {name}")
+            continue
+        n = qty - needs.get(item, 0)
+        if n <= 0:
+            skipped.append(f"{name} (needed for your next upgrade)")
+            continue
+        if kind == "ore":
+            each = ORE_BY_KEY[key].value
+        elif kind == "mut":
+            m, ore = split_mut(key)
+            each = ore.value * m.mult
+        else:
+            each = data.bar_value(key)
+        db.add_item(uid, item, -n)
+        total += each * n
+        sold += n
+    total = int(total * mult)
+    db.run("UPDATE users SET coins = coins + ?, total_earned = total_earned + ? WHERE id=?", total, total, uid)
+    db.bump(uid, "sold_coins", total)
+    return sold, total, skipped
+
+
+def item_value(item):
+    kind, _, key = item.partition(":")
+    if kind == "ore":
+        return ORE_BY_KEY[key].value
+    if kind == "mut":
+        m, ore = split_mut(key)
+        return ore.value * m.mult
+    if kind == "bar":
+        return data.bar_value(key)
+    return 0
+
+
+def backfill_best_finds(db):
+    """v0.6.0: rarest find now counts mutations. Works it out once for existing players from their best ore
+    and the mutated ores they still have."""
+    if db.meta("best_find_backfilled"):
+        return
+    with db.tx():
+        for u in db.q("SELECT id, best_ore FROM users"):
+            cands = []
+            if u["best_ore"] in ORE_BY_KEY:
+                o = ORE_BY_KEY[u["best_ore"]]
+                cands.append((find_score(o), "ore:" + o.key))
+            for item in db.items(u["id"], "mut:"):
+                try:
+                    m, o = split_mut(item[4:])
+                except KeyError:
+                    continue
+                cands.append((find_score(o, m), item))
+            if cands:
+                score, key = max(cands)
+                db.set(u["id"], best_find=key, best_score=score)
+        db.set_meta("best_find_backfilled", 1)
+
+
+def retire_old_snacks(db):
+    """Swaps snacks that no longer exist for their replacement, so nobody's bag has a broken item."""
+    for old, new in data.RETIRED_SNACKS.items():
+        rows = db.q("SELECT user_id, qty FROM items WHERE item=? AND qty>0", "snack:" + old)
+        if not rows:
+            continue
+        with db.tx():
+            for r in rows:
+                db.add_item(r["user_id"], "snack:" + new, r["qty"])
+            db.run("DELETE FROM items WHERE item=?", "snack:" + old)
+            db.run("DELETE FROM locks WHERE item=?", "snack:" + old)
 
 
 def next_pickaxe(user):
@@ -521,9 +645,9 @@ def collect_sluglings(db, uid):
     n = int(elapsed // data.SLUGLING_SECONDS_PER_ROLL) * user["sluglings"]
     n = min(n, 50_000)
     luck = luck_for(db, user, base=data.SLUGLING_LUCK).total
-    ores = [roll_ore(user["layer"], luck) for _ in range(n)]
+    ores = [roll_ore(user["layer"], luck, fast_rng) for _ in range(n)]
     muts = []
-    record_finds(db, uid, ores, muts)
+    record_finds(db, uid, ores, muts, fast_rng if n > 100 else None)
     db.bump(uid, "collected")
     return ores, elapsed, muts
 
@@ -546,7 +670,7 @@ def apply_prize(db, uid, prize):
         db.add_coins(uid, amount)
         return f"You found a pouch with **{amount:,} coins**!"
     db.add_buff(uid, prize.kind, prize.amount, prize.minutes * 60)
-    return f"**{prize.name}** for {prize.minutes} minutes!"
+    return f"**{prize.name.replace('  ', ': ')}** for {prize.minutes} minutes!"
 
 
 def can_rebirth(user):

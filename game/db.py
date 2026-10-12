@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS locks (
     item TEXT NOT NULL,
     PRIMARY KEY (user_id, item)
 );
+CREATE TABLE IF NOT EXISTS usage (
+    at REAL NOT NULL,
+    guild_id INTEGER,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    action TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_at ON usage (at);
 CREATE TABLE IF NOT EXISTS claims (
     kind TEXT NOT NULL,
     event INTEGER NOT NULL,
@@ -136,6 +144,8 @@ MIGRATIONS = [
     ("users", "ship_paint", "INTEGER NOT NULL DEFAULT 0"),        # v0.3.0
     ("users", "last_check", "REAL NOT NULL DEFAULT 0"),           # v0.3.0
     ("users", "last_raid", "REAL NOT NULL DEFAULT 0"),            # v0.3.0
+    ("users", "best_find", "TEXT"),                               # v0.6.0 rarest find incl. mutations
+    ("users", "best_score", "REAL NOT NULL DEFAULT 0"),           # v0.6.0
 ]
 
 
@@ -310,7 +320,7 @@ class DB:
         now = time.time()
         if cur and cur[0] == amount:
             expires = cur[1] + seconds          # same buff stacks its time
-        elif cur and cur[0] > amount and kind != "haste":
+        elif cur and cur[0] > amount:
             expires = cur[1]                    # keep the stronger one
             amount = cur[0]
         else:
@@ -373,6 +383,14 @@ class DB:
 
     def claims(self, kind, event):
         return [r["user_id"] for r in self.q("SELECT user_id FROM claims WHERE kind=? AND event=? ORDER BY at", kind, event)]
+
+    def log_usage(self, guild_id, user_id, kind, action):
+        """One row per command or button press, for /alcad. Rows older than 90 days get pruned."""
+        self.run("INSERT INTO usage (at, guild_id, user_id, kind, action) VALUES (?, ?, ?, ?, ?)",
+                 time.time(), guild_id, user_id, kind, action[:60])
+
+    def prune_usage(self, days=90):
+        self.run("DELETE FROM usage WHERE at < ?", time.time() - days * 86400)
 
     def bot_channels(self, gid):
         """Channels the game is limited to in this server (empty = anywhere)."""

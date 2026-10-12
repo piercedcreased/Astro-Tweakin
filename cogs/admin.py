@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import asyncio
+import time
 
 from game import backup, images, updates
 from game.data import MUT_BY_KEY, MUTATIONS, ORES, ORE_BY_KEY
@@ -22,7 +23,16 @@ def is_admin(interaction: discord.Interaction):
     return bool(perms and perms.manage_guild)
 
 
+async def is_owner(interaction: discord.Interaction):
+    """The bot's owners: ADMIN_USER_IDS in .env, or whoever owns the bot in the Discord developer portal.
+    The save is shared by every server, so anything that hands out coins, luck or loot is owners-only;
+    a server's own admins can still set up channels."""
+    bot = interaction.client
+    return interaction.user.id in bot.admin_ids or await bot.is_owner(interaction.user)
+
+
 admin_only = app_commands.check(is_admin)
+owner_only = app_commands.check(is_owner)
 
 
 class Admin(commands.Cog):
@@ -38,23 +48,24 @@ class Admin(commands.Cog):
         self.db.set_announce_channel(interaction.guild.id, channel.id)
         await interaction.response.send_message(f"Rare finds will be announced in {channel.mention}.", ephemeral=True)
 
-    @group.command(name="event", description="Start a server-wide luck event")
-    @admin_only
+    @group.command(name="event", description="Start a luck event for every player")
+    @owner_only
     async def event(self, interaction: discord.Interaction, luck: app_commands.Range[float, 1, 100],
                     minutes: app_commands.Range[int, 1, 1440], name: str = "Meteor Shower"):
         self.db.set_event(luck, minutes * 60, name)
         await interaction.response.send_message(
             f"☄️ **{name}!** Everyone has **x{luck:g} luck** for the next **{minutes} minutes**!")
 
-    @group.command(name="give", description="Give a player coins")
-    @admin_only
-    async def give(self, interaction: discord.Interaction, member: discord.Member, coins: int):
+    @group.command(name="give", description="Give a player coins (negative takes them away)")
+    @owner_only
+    async def give(self, interaction: discord.Interaction, member: discord.Member,
+                   coins: app_commands.Range[int, -10 ** 15, 10 ** 15]):
         self.db.user(member.id, member.display_name)
         self.db.add_coins(member.id, coins)
         await interaction.response.send_message(f"Gave {member.mention} {coins:,} coins.", ephemeral=True)
 
     @group.command(name="backup", description="Save a backup of all player data right now")
-    @admin_only
+    @owner_only
     async def backup_now(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         path = await asyncio.to_thread(backup.make_backup, self.db, "manual")
@@ -62,21 +73,21 @@ class Admin(commands.Cog):
         await interaction.followup.send(f"Backup saved: `{path}` ({n} backups kept).", ephemeral=True)
 
     @group.command(name="restart", description="Restart the bot to load new code and post new update notes")
-    @admin_only
+    @owner_only
     async def restart(self, interaction: discord.Interaction):
         await interaction.response.send_message("🔄 Restarting. Back in about 10 seconds.", ephemeral=True)
         await self.bot.close()   # start.bat brings it straight back up
 
-    @group.command(name="meteor", description="Drop a meteor strike in the announce channel right now")
-    @admin_only
+    @group.command(name="meteor", description="Drop a meteor strike in this channel right now")
+    @owner_only
     async def meteor(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        n = await self.bot.get_cog("Space").drop_meteor()
-        await interaction.followup.send(f"☄️ Meteor dropped in {n} channel(s)." if n else
-                                        "No announce channel set. Use `/admin announce` first.", ephemeral=True)
+        n = await self.bot.get_cog("Space").drop_meteor(channels=[interaction.channel])
+        await interaction.followup.send("☄️ Meteor dropped here." if n else
+                                        "I couldn't post here (needs Send Messages, Embed Links and Attach Files).", ephemeral=True)
 
     @group.command(name="tim", description="Make Tweaker Tim show up in the announce channel right now")
-    @admin_only
+    @owner_only
     async def tim(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         n = await self.bot.get_cog("Space").tim_arrives()
@@ -84,7 +95,7 @@ class Admin(commands.Cog):
                                         "No announce channel set. Use `/admin announce` first.", ephemeral=True)
 
     @group.command(name="cops", description="Send the Space Authority after yourself to test a cargo check")
-    @admin_only
+    @owner_only
     async def cops(self, interaction: discord.Interaction):
         sp = self.bot.get_cog("Space")
         if sp.busy(interaction.user.id):
@@ -198,13 +209,104 @@ class Admin(commands.Cog):
         except RuntimeError:
             logging.getLogger("astro-tweakin.admin").exception("Test error requested by %s", interaction.user.display_name)
 
+    # ------------------------------------------------------------ /alcad: logs and usage analytics (owners only)
+
+    @app_commands.command(name="alcad")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.choices(show=[app_commands.Choice(name="usage", value="usage"),
+                                app_commands.Choice(name="errors", value="errors")])
+    @owner_only
+    async def alcad(self, interaction: discord.Interaction, show: app_commands.Choice[str] = None,
+                    member: discord.User = None, days: app_commands.Range[int, 1, 90] = 7):
+        await interaction.response.defer(ephemeral=True)
+        if show and show.value == "errors":
+            await interaction.followup.send(**self._errors_report(), ephemeral=True)
+        else:
+            await interaction.followup.send(embed=self._usage_report(member, days), ephemeral=True)
+
+    def _name(self, uid):
+        row = self.db.one("SELECT name FROM users WHERE id=?", uid)
+        return (row["name"] if row and row["name"] else None) or str(uid)
+
+    def _guild_name(self, gid):
+        g = self.bot.get_guild(gid) if gid else None
+        return g.name if g else ("DMs" if not gid else str(gid))
+
+    def _usage_report(self, member, days):
+        since = time.time() - days * 86400
+        e = discord.Embed(title=f"📈 Usage · last {days} day{'s' if days != 1 else ''}", color=discord.Color.blurple())
+        if member:
+            e.title += f" · {member.display_name}"
+            rows = self.db.q("SELECT action, kind, COUNT(*) AS n FROM usage WHERE at>=? AND user_id=? AND kind IN "
+                             "('slash','button','chat') GROUP BY action ORDER BY n DESC LIMIT 20", since, member.id)
+            total = sum(r["n"] for r in rows)
+            e.description = f"**{total:,}** commands and button presses" + ("" if total else " (nothing yet)")
+            if rows:
+                e.add_field(name="What they use most", inline=False,
+                            value="\n".join(f"`{r['n']:>6,}` {r['action']}" for r in rows)[:1024])
+            per = self.db.q("SELECT guild_id, COUNT(*) AS n FROM usage WHERE at>=? AND user_id=? GROUP BY guild_id "
+                            "ORDER BY n DESC LIMIT 10", since, member.id)
+            if per:
+                e.add_field(name="Where", inline=False,
+                            value="\n".join(f"`{r['n']:>6,}` {self._guild_name(r['guild_id'])}" for r in per)[:1024])
+            return e
+        main = "kind IN ('slash','button','chat')"
+        tot = self.db.one(f"SELECT COUNT(*) AS n, COUNT(DISTINCT user_id) AS u, COUNT(DISTINCT guild_id) AS g "
+                          f"FROM usage WHERE at>=? AND {main}", since)
+        slow = self.db.one("SELECT COUNT(*) AS n FROM usage WHERE at>=? AND kind='slow'", since)["n"]
+        expired = self.db.one("SELECT COUNT(*) AS n FROM usage WHERE at>=? AND kind='expired'", since)["n"]
+        e.description = (f"**{tot['n']:,}** commands and button presses from **{tot['u']:,}** players in "
+                         f"**{tot['g']:,}** server(s).\n🐢 Slow presses caught before they failed: **{slow:,}**  ·  "
+                         f"❌ presses that still timed out: **{expired:,}**")
+        top = self.db.q(f"SELECT action, COUNT(*) AS n FROM usage WHERE at>=? AND kind IN ('slash','chat') "
+                        f"GROUP BY action ORDER BY n DESC LIMIT 12", since)
+        if top:
+            e.add_field(name="Top commands", value="\n".join(f"`{r['n']:>6,}` {r['action']}" for r in top)[:1024])
+        btn = self.db.q("SELECT action, COUNT(*) AS n FROM usage WHERE at>=? AND kind='button' "
+                        "GROUP BY action ORDER BY n DESC LIMIT 12", since)
+        if btn:
+            e.add_field(name="Top buttons", value="\n".join(f"`{r['n']:>6,}` {r['action']}" for r in btn)[:1024])
+        users = self.db.q(f"SELECT user_id, COUNT(*) AS n FROM usage WHERE at>=? AND {main} "
+                          f"GROUP BY user_id ORDER BY n DESC LIMIT 10", since)
+        lines = []
+        for r in users:
+            fav = self.db.q(f"SELECT action, COUNT(*) AS n FROM usage WHERE at>=? AND user_id=? AND {main} "
+                            f"GROUP BY action ORDER BY n DESC LIMIT 3", since, r["user_id"])
+            lines.append(f"`{r['n']:>6,}` **{self._name(r['user_id'])}**: " + ", ".join(f"{f['action']} ({f['n']:,})" for f in fav))
+        if lines:
+            e.add_field(name="Most active players (and what they use most)", value="\n".join(lines)[:1024], inline=False)
+        guilds = self.db.q(f"SELECT guild_id, COUNT(*) AS n, COUNT(DISTINCT user_id) AS u FROM usage WHERE at>=? AND {main} "
+                           f"GROUP BY guild_id ORDER BY n DESC LIMIT 10", since)
+        if guilds:
+            e.add_field(name="Servers", inline=False, value="\n".join(
+                f"`{r['n']:>6,}` {self._guild_name(r['guild_id'])} ({r['u']} players)" for r in guilds)[:1024])
+        e.set_footer(text="Pick a member to see one person · show: errors for the error log · kept for 90 days")
+        return e
+
+    def _errors_report(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "errors.log")
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            return {"content": "No error log yet. Nothing has gone wrong. 🎉"}
+        lines = text.splitlines()
+        heads = [l for l in lines if l[:4].isdigit() and (" ERROR " in l or " CRITICAL " in l)]
+        e = discord.Embed(title="🧾 Error log", color=discord.Color.red(),
+                          description=f"**{len(heads):,}** errors in the current log file. The newest:")
+        tail = "\n".join(heads[-12:]) or "(none)"
+        e.add_field(name="Latest", value=f"```{tail[-1000:]}```", inline=False)
+        recent = "\n".join(lines[-400:])
+        return {"embed": e, "file": discord.File(io.BytesIO(recent.encode("utf-8")), filename="errors_recent.log")}
+
     async def cog_app_command_error(self, interaction, error):
         if not isinstance(error, app_commands.CheckFailure):
             original = getattr(error, "original", error)
             logging.getLogger("astro-tweakin.admin").error(
                 "/admin command failed for %s", interaction.user.display_name,
                 exc_info=(type(original), original, original.__traceback__))
-        msg = "You need Manage Server to use that." if isinstance(error, app_commands.CheckFailure) else f"Error: {error}"
+        msg = ("You need Manage Server to use that (coins, luck, meteors and Tim are bot-owner only)."
+               if isinstance(error, app_commands.CheckFailure) else f"Error: {error}")
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
         else:

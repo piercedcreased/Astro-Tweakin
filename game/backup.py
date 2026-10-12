@@ -28,13 +28,16 @@ def make_backup(db, reason="auto"):
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     path = os.path.join(folder, f"astro_tweakin_{stamp}_{reason}.db")
     tmp = path + ".partial"
-    with db._lock:
-        dest = sqlite3.connect(tmp)
-        try:
-            db.conn.backup(dest)
-            ok = dest.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        finally:
-            dest.close()
+    # Reads through its own connection: WAL lets it copy every finished save while the game keeps going.
+    # (It used to hold the game's lock, which froze every button for the whole backup.)
+    src = sqlite3.connect(db.path, timeout=30)
+    dest = sqlite3.connect(tmp)
+    try:
+        src.backup(dest)
+        ok = dest.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        dest.close()
+        src.close()
     if not ok:
         os.remove(tmp)
         raise RuntimeError("Backup failed its integrity check, so it was thrown away.")

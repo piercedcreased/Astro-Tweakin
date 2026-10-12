@@ -14,6 +14,7 @@ import io
 import math
 import os
 import random
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -320,9 +321,23 @@ def _fit(text, max_w, size):
 _REVEALS = {}   # (ore, name) -> GIF bytes, so finding the same ore again doesn't re-render it
 
 
-def reveal_gif(ore, user_name, frames=None, mut=None):
+def safe_name(name, fallback="SOMEONE"):
+    """Display names with fancy Unicode letters (𝓣𝓲𝓶, ｔｉｍ, emoji) come out as boxes in the GIF font.
+    NFKC turns most styled letters back into plain ones; anything still undrawable is dropped."""
+    plain = unicodedata.normalize("NFKC", name or "")
+    plain = "".join(ch for ch in plain if " " <= ch <= "\u017f").strip()
+    if sum(ch.isalnum() for ch in plain) >= 2:
+        return plain
+    fb = unicodedata.normalize("NFKC", fallback or "")
+    fb = "".join(ch for ch in fb if " " <= ch <= "\u017f").strip()
+    return fb if sum(ch.isalnum() for ch in fb) >= 2 else "SOMEONE"
+
+
+def reveal_gif(ore, user_name, frames=None, mut=None, fallback=None):
     """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly. Cached in memory.
-    mut = a Mutation: shows the mutated ore with that mutation's colours and title instead."""
+    mut = a Mutation: shows the mutated ore with that mutation's colours and title instead.
+    fallback = a plain name to use if user_name can't be drawn (their account username)."""
+    user_name = safe_name(user_name, fallback)
     key = (ore.key, user_name, frames, mut.key if mut else None)
     if key in _REVEALS:
         _REVEALS[key] = _REVEALS.pop(key)          # mark as recently used
@@ -465,6 +480,17 @@ def _prize_icon(d, kind, box, col):
     elif kind == "pick":
         _pickaxe(d, cx, cy, s * 1.6, (190, 140, 255))
         d.text((cx + s * .5, cy + s * .55), "x2", font=font(int(s * .5)), fill=white, anchor="mm", stroke_width=2, stroke_fill=(0, 0, 0))
+    elif kind == "cash":
+        d.rounded_rectangle([cx - s * .8, cy - s * .45, cx + s * .8, cy + s * .45], radius=6, fill=(110, 200, 90), outline=(40, 110, 40), width=3)
+        d.text((cx, cy), "$", font=font(int(s * .8)), fill=(255, 230, 90), anchor="mm", stroke_width=2, stroke_fill=(40, 90, 30))
+    elif kind == "dna":
+        for i in range(9):
+            t = i / 8
+            y = cy - s * .8 + t * s * 1.6
+            w = math.sin(t * math.pi * 2) * s * .5
+            d.line([(cx - w, y), (cx + w, y)], fill=(180, 240, 255), width=3)
+            d.ellipse([cx - w - 4, y - 4, cx - w + 4, y + 4], fill=(120, 220, 255))
+            d.ellipse([cx + w - 4, y - 4, cx + w + 4, y + 4], fill=(255, 140, 220))
     elif kind == "star":
         d.polygon(_star_pts(cx, cy, s * .8, s * .35, 5), fill=(80, 255, 140), outline=(20, 120, 50))
     elif kind == "slug":
@@ -503,7 +529,7 @@ def reel_gif(result):
     cells = {p.key: _cell(p, C) for p in PRIZES}
     target = land * step + C / 2 - W / 2 + r.uniform(-C * 0.35, C * 0.35)
     final = land * step + C / 2 - W / 2
-    N = 34
+    N = 44                      # about 2.6s of spinning, so it's still going when a slow client finishes loading it
     frames, durs = [], []
     for f in range(N + 1):
         t = f / N
@@ -524,7 +550,7 @@ def reel_gif(result):
         label = result.name.split("  ")[0] if f == N else "LUCKY ROLL..."
         _outlined(d, (W / 2, H - 11), label, 18, result.color if f == N else (255, 255, 255), stroke=3)
         frames.append(img)
-        durs.append(40 if f < N else 3000)
+        durs.append(60 if f < N else 3000)
     buf = io.BytesIO()
     # no loop extension: plays once and stays on the result
     frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=durs, optimize=True)
@@ -1102,3 +1128,63 @@ def asteroid_board(run, paint=(220, 60, 60)):
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "JPEG", quality=85)
     return buf.getvalue()
+
+
+# ================================================================ v0.6.0: depth banner on the /mine panel
+
+_DEPTH = {}
+
+
+def depth_banner(layer_num):
+    """The picture at the bottom of /mine: a slice through the planet you're on, with your layer lit up
+    and a depth gauge for the whole universe. One JPEG per layer, cached, so it's only drawn once."""
+    if layer_num in _DEPTH:
+        return _DEPTH[layer_num]
+    from .data import LAYERS
+    L = LAYERS[layer_num - 1]
+    same = [l for l in LAYERS if l.planet == L.planet]
+    W, H = 600, 150
+    img = _space_bg(W, H, "depth" + L.planet, stars=50)
+    d = ImageDraw.Draw(img)
+    sky = 34
+    band_h = (H - sky) / len(same)
+    r = random.Random(L.planet)
+    # surface line
+    surf = [(x, sky + math.sin(x / 37 + len(L.planet)) * 3) for x in range(0, W + 10, 10)]
+    d.polygon(surf + [(W, H), (0, H)], fill=_dark(same[0].color, 0.35))
+    for i, l in enumerate(same):
+        y0, y1 = sky + i * band_h, sky + (i + 1) * band_h
+        here = l.num == layer_num
+        col = l.color if here else _dark(l.color, 0.5)
+        d.rectangle([0, y0 + 2, W, y1], fill=_dark(col, 0.25 if here else 0.1))
+        for _ in range(int(W / 9)):
+            x, y = r.uniform(0, W), r.uniform(y0 + 4, y1 - 2)
+            s = r.uniform(1.5, 4.5)
+            d.ellipse([x - s, y - s * .7, x + s, y + s * .7], fill=_light(col, 0.15) if here else _dark(col, 0.45))
+        d.line([(0, y0 + 2), (W, y0 + 2)], fill=_dark(col, 0.6), width=2)
+        if here:
+            d.rectangle([0, y0 + 2, W - 1, y1 - 1], outline=_light(col, 0.4), width=3)
+            # a little miner with a pickaxe
+            mx, my = 70, (y0 + y1) / 2 + 2
+            d.ellipse([mx - 14, my - 8, mx + 14, my + 10], fill=(150, 220, 110), outline=(40, 80, 30), width=2)
+            d.ellipse([mx + 6, my - 4, mx + 10, my], fill=(20, 20, 20))
+            _pickaxe(d, mx + 22, my - 10, 30, (200, 200, 220))
+            _outlined(d, (110, (y0 + y1) / 2), l.name.upper(), _fit(l.name.upper(), 330, 26), _light(col, 0.5), anchor="lm", stroke=3)
+        elif band_h >= 22:
+            _outlined(d, (110, (y0 + y1) / 2), l.name, 15, _light(col, 0.2), anchor="lm", stroke=2)
+    _outlined(d, (12, sky / 2), L.planet_info.name.upper(), 20, (255, 255, 255), anchor="lm", stroke=3)
+    # universe depth gauge on the right
+    gx, gy0, gy1 = W - 46, 12, H - 12
+    d.rounded_rectangle([gx - 12, gy0 - 4, gx + 12, gy1 + 4], radius=10, fill=(15, 12, 25), outline=(90, 90, 120), width=2)
+    step = (gy1 - gy0) / len(LAYERS)
+    for l in LAYERS:
+        y = gy0 + (l.num - 1) * step
+        on = l.num <= layer_num
+        d.rectangle([gx - 7, y + 1, gx + 7, y + step - 1], fill=l.color if on else (40, 38, 55))
+    y = gy0 + (layer_num - 0.5) * step
+    d.polygon([(gx - 22, y - 6), (gx - 14, y), (gx - 22, y + 6)], fill=(255, 215, 60))
+    _outlined(d, (gx - 26, H - 14), f"DEPTH {layer_num}/{len(LAYERS)}", 15, (255, 215, 60), anchor="rm", stroke=2)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=82)
+    _DEPTH[layer_num] = buf.getvalue()
+    return _DEPTH[layer_num]

@@ -328,20 +328,22 @@ class Prize:
     key: str
     name: str
     weight: int
-    kind: str             # luck, haste, rolls, coins
+    kind: str             # buff kind (luck, echo, sell, mutluck) or "coins"
     amount: float
     minutes: int
     color: tuple
-    icon: str             # clover, bolt, coin, pick, slug, star
+    icon: str             # clover, bolt, coin, pick, slug, star, dna, cash
 
 
+# Haste was retired in v0.6.0: Discord can't take button presses faster than about one a second anyway.
 PRIZES = [
-    Prize("pouch", "Coin Pouch", 28, "coins", 1, 0, (240, 190, 40), "coin"),
-    Prize("lucky", "Lucky Hour  x1.5 luck", 28, "luck", 1.5, 10, (90, 210, 90), "clover"),
-    Prize("haste", "Haste  -40% cooldown", 20, "haste", 0.6, 10, (80, 180, 255), "bolt"),
-    Prize("double", "Double Dig  x2 ores", 13, "rolls", 2, 5, (200, 130, 255), "pick"),
-    Prize("surge", "Clover Surge  x3 luck", 8, "luck", 3, 5, (40, 255, 120), "star"),
-    Prize("blessing", "Slug Blessing  x10 luck", 3, "luck", 10, 2, (255, 120, 220), "slug"),
+    Prize("pouch", "Coin Pouch", 30, "coins", 1, 0, (240, 190, 40), "coin"),
+    Prize("lucky", "Lucky Hour  x1.5 luck", 26, "luck", 1.5, 10, (90, 210, 90), "clover"),
+    Prize("midas", "Midas Touch  x1.5 sell value", 16, "sell", 1.5, 10, (255, 215, 90), "cash"),
+    Prize("magnet", "Mutation Magnet  x3 mutations", 12, "mutluck", 3, 10, (120, 220, 255), "dna"),
+    Prize("echo", "Echo Swing  2x mines", 7, "echo", 2, 5, (200, 130, 255), "pick"),
+    Prize("surge", "Clover Surge  x3 luck", 7, "luck", 3, 5, (40, 255, 120), "star"),
+    Prize("blessing", "Slug Blessing  x10 luck", 2, "luck", 10, 2, (255, 120, 220), "slug"),
 ]
 PRIZE_BY_KEY = {p.key: p for p in PRIZES}
 
@@ -468,20 +470,24 @@ class Snack:
     name: str
     emoji: str
     buff: str             # buff kind
-    amount: float
-    minutes: int
-    coins: int            # x layer scale
+    amount: float         # strength for a brand-new player...
+    amount_max: float     # ...growing to this with depth and pickaxe (see snack_power in space.py)
+    minutes: int          # same for how long it lasts
+    minutes_max: int
+    coins: int            # x layer scale, cheaper early on
     ore_qty: int          # how many of your current layer's base ore
-    blurb: str
+    blurb: str            # "{amount}" and "{minutes}" get filled in
 
 
+# Keep this list the same length: Tweaker Tim's saved visits point into it by position.
 SNACKS = [
-    Snack("luck_juice", "Luck Juice", "🧃", "snack_luck", 2, 15, 3_000, 40, "x2 luck for 15 minutes. Tastes like pennies."),
-    Snack("haste_gummies", "Haste Gummies", "🍬", "haste", 0.6, 15, 2_500, 30, "-40% mining cooldown for 15 minutes."),
-    Snack("double_dip", "Double Dip Chips", "🥔", "rolls", 2, 10, 4_000, 50, "x2 ores per swing for 10 minutes."),
-    Snack("cop_repellent", "Cop Repellent", "🧴", "nocops", 1, 120, 5_000, 60, "No cargo checks for 2 hours. Smells like donuts."),
-    Snack("mega_munchies", "Mega Munchies", "🍔", "snack_luck", 5, 5, 12_000, 120, "x5 luck for 5 minutes. You will not stop eating."),
+    Snack("luck_juice", "Luck Juice", "🧃", "snack_luck", 1.5, 2.5, 10, 15, 3_000, 40, "x{amount} luck for {minutes} minutes. Tastes like pennies."),
+    Snack("mutation_mints", "Mutation Mints", "🍬", "mutluck", 1.5, 3, 10, 15, 3_500, 40, "x{amount} mutation chance for {minutes} minutes. Minty. Glowing."),
+    Snack("double_dip", "Double Dip Chips", "🥔", "rolls", 2, 2, 5, 10, 4_000, 50, "x{amount} ores per swing for {minutes} minutes."),
+    Snack("cop_repellent", "Cop Repellent", "🧴", "nocops", 1, 1, 30, 120, 5_000, 60, "No cargo checks for {minutes} minutes. Smells like donuts."),
+    Snack("mega_munchies", "Mega Munchies", "🍔", "snack_luck", 3, 6, 5, 5, 12_000, 120, "x{amount} luck for {minutes} minutes. You will not stop eating."),
 ]
+RETIRED_SNACKS = {"haste_gummies": "mutation_mints"}   # old snack -> what players get instead
 SNACK_BY_KEY = {s.key: s for s in SNACKS}
 
 # ---- Bounty board: 3 jobs a day (UTC). stat = which counter has to go up, need = by how much.

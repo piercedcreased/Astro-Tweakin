@@ -169,7 +169,7 @@ class Space(commands.Cog):
         wait = space.asteroid_wait(self.db, uid)
         v.add_item(B("ar_start", uid, "Asteroid Run" if wait <= 0 else f"Asteroid Run in {fmt_time(wait)}", "☄️",
                      discord.ButtonStyle.primary, disabled=wait > 0, row=1))
-        v.add_item(B("back", uid, "Back", "↩️", row=1))
+        v.add_item(B("inv", uid, "Back", "↩️", row=1))
         return e, files, v
 
     # ================================================================ Asteroid Run
@@ -263,12 +263,13 @@ class Space(commands.Cog):
         user = self.db.user(uid)
         e = discord.Embed(title="🍬 Space Snack Bar", color=discord.Color.from_rgb(255, 150, 60),
                           description=(note + "\n\n" if note else "") +
-                          "Cook snacks from coins and the base ore of the layer you're on, then eat them for boosts.")
+                          "Cook snacks from coins and the base ore of the layer you're on, then eat them for boosts. "
+                          "They start cheap and mild, and get stronger the deeper you go and the better your pickaxe.")
         for s in SNACKS:
             coins, mats = space.snack_cost(user, s)
             need = ", ".join(f"{q}x {engine.item_name(i)} (have {self.db.qty(uid, i)})" for i, q in mats.items())
             e.add_field(name=f"{s.emoji} {s.name}  ·  you have {self.db.qty(uid, 'snack:' + s.key)}",
-                        value=f"*{s.blurb}*\n{coins:,} coins + {need}", inline=False)
+                        value=f"*{space.snack_blurb(user, s)}*\n{coins:,} coins + {need}", inline=False)
         e.set_footer(text=f"You have {user['coins']:,} coins")
         v = discord.ui.View(timeout=None)
         for s in SNACKS:
@@ -276,7 +277,7 @@ class Space(commands.Cog):
         for s in SNACKS:
             v.add_item(B("snackeat_" + s.key, uid, f"Eat {s.name}", s.emoji, discord.ButtonStyle.primary,
                          disabled=self.db.qty(uid, "snack:" + s.key) <= 0, row=1))
-        v.add_item(B("back", uid, "Back", "↩️", row=2))
+        v.add_item(B("inv", uid, "Back", "↩️", row=2))
         return e, [], v
 
     def bounty_panel(self, uid, note=None):
@@ -294,7 +295,7 @@ class Space(commands.Cog):
             v.add_item(B(f"bounty_{r['idx']}", uid, f"Claim #{r['idx'] + 1}", "💰", discord.ButtonStyle.success,
                          disabled=r["claimed"] or not done))
         e.set_footer(text=f"New jobs in {fmt_time(space.seconds_to_reset())} (midnight UTC)")
-        v.add_item(B("back", uid, "Back", "↩️"))
+        v.add_item(B("player", uid, "Back", "↩️"))
         return e, [], v
 
     def trophy_panel(self, uid, buttons=False):
@@ -308,7 +309,7 @@ class Space(commands.Cog):
         v = None
         if buttons:
             v = discord.ui.View(timeout=None)
-            v.add_item(B("back", uid, "Back", "↩️"))
+            v.add_item(B("player", uid, "Back", "↩️"))
         return e, [], v
 
     # ================================================================ cargo checks
@@ -324,10 +325,17 @@ class Space(commands.Cog):
         c = space.new_check(self.db, uid, name)
         c.guild = interaction.guild
         self.checks[uid] = c
-        gif = await asyncio.to_thread(images.police_gif, "SPACE AUTHORITY CARGO CHECK!", f"PULL OVER, {name.upper()}")
-        e, v = self.check_view(c)
-        c.message = await interaction.followup.send(content=f"<@{uid}>", embed=e, view=v,
-                                                    file=gif_file(gif, "cops.gif"), wait=True)
+        try:
+            gif = await asyncio.to_thread(images.police_gif, "SPACE AUTHORITY CARGO CHECK!",
+                                          f"PULL OVER, {images.safe_name(name, interaction.user.name).upper()}")
+            e, v = self.check_view(c)
+            c.message = await interaction.followup.send(content=f"<@{uid}>", embed=e, view=v,
+                                                        file=gif_file(gif, "cops.gif"), wait=True)
+        except Exception:
+            # couldn't post the stop (no permission, Discord hiccup): let them go instead of locking their buttons
+            self.checks.pop(uid, None)
+            log.exception("Couldn't start a cargo check for %s", uid)
+            return
         asyncio.create_task(self.check_timer(c))
 
     def check_view(self, c):
@@ -663,6 +671,7 @@ class Space(commands.Cog):
                     if kind == "meteor":
                         e = m.embeds[0] if m.embeds else discord.Embed()
                         e.title = "☄️ The meteor cooled off"
+                        e.set_image(url="attachment://meteor.gif")   # see handle_event
                         await m.edit(embed=e, view=None)
                     else:
                         e = discord.Embed(title="👽 Tweaker Tim has left", color=discord.Color.dark_grey(),
@@ -672,15 +681,19 @@ class Space(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-    async def drop_meteor(self):
+    async def drop_meteor(self, channels=None):
+        """The daily meteor lands in every server's announce channel. channels = only those (/admin meteor
+        uses the channel it was typed in); that one doesn't start the everywhere-luck shower either."""
         event = int(time.time())
         expires = time.time() + data.METEOR_MINUTES * 60
         self.db.set_meta(f"meteor:{event}", expires)
         luck, minutes = data.METEOR_SHOWER
-        ev = self.db.event()
-        if not ev or ev["luck"] < luck:
-            self.db.set_event(luck, minutes * 60, "Meteor Shower")
-        channels = self.event_channels()
+        shower = channels is None
+        if shower:
+            ev = self.db.event()
+            if not ev or ev["luck"] < luck:
+                self.db.set_event(luck, minutes * 60, "Meteor Shower")
+        channels = self.event_channels() if channels is None else channels
         if not channels:
             log.warning("A meteor hit but no announce channel is set (/admin announce)")
             return 0
@@ -690,7 +703,7 @@ class Space(commands.Cog):
             e = discord.Embed(title="☄️ METEOR STRIKE!", color=discord.Color.from_rgb(255, 140, 40), description=(
                 f"A meteor just slammed into the server! The first **{data.METEOR_CLAIMS}** miners get "
                 f"**{data.METEOR_ROLLS} rolls at x{data.METEOR_LUCK:g} luck** plus coins.\n"
-                f"☄️ Everyone gets **x{luck:g} luck** for {minutes} minutes from the meteor shower.\n"
+                + (f"☄️ Everyone gets **x{luck:g} luck** for {minutes} minutes from the meteor shower.\n" if shower else "") +
                 f"It cools off <t:{int(expires)}:R>."))
             e.set_image(url="attachment://meteor.gif")
             v = discord.ui.View(timeout=None)
@@ -737,6 +750,10 @@ class Space(commands.Cog):
 
     async def handle_event(self, interaction, action, arg):
         uid = interaction.user.id
+        if self.busy(uid):
+            await interaction.response.send_message("🚔 The Space Authority is searching your ship! Deal with them first.",
+                                                    ephemeral=True)
+            return
         self.db.user(uid, interaction.user.display_name)
         async with self.game.locks[uid]:
             try:
@@ -750,6 +767,9 @@ class Space(commands.Cog):
                         f"⛏️ You were miner **#{place}** on the meteor! +**{coins:,}** coins and:\n{ore_summary(ores)}", ephemeral=True)
                     try:
                         e = interaction.message.embeds[0]
+                        # an embed read back from Discord points at the CDN copy of the GIF; editing with that made
+                        # Discord show the GIF twice (in the embed and loose under it). Point it at the attachment.
+                        e.set_image(url="attachment://meteor.gif")
                         names = [self.db.user(u)["name"] or "?" for u in self.db.claims("meteor", arg)]
                         e.clear_fields()
                         e.add_field(name=f"Miners ({len(names)}/{data.METEOR_CLAIMS})", value=", ".join(names))

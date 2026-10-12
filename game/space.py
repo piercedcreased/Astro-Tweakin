@@ -274,9 +274,36 @@ def settle_duel(db, winner, loser, wager):
 
 # ================================================================ space snacks
 
+def progress(user):
+    """0 for a brand-new player, 1 at the bottom of the universe with the best pickaxe.
+    Depth and pickaxe count the same."""
+    depth = (user["max_layer"] - 1) / max(1, len(LAYERS) - 1)
+    picks = [p.key for p in data.PICKAXES]
+    pick = picks.index(user["pickaxe"]) / max(1, len(picks) - 1) if user["pickaxe"] in picks else 0
+    return (depth + pick) / 2
+
+
+def snack_power(user, snack):
+    """(amount, minutes) for this player. Snacks start weak and get stronger as you go deeper and
+    upgrade your pickaxe."""
+    t = progress(user)
+    amount = snack.amount + (snack.amount_max - snack.amount) * t
+    amount = round(amount * 4) / 4 if snack.buff != "rolls" else int(amount)   # quarter steps: x1.5, x1.75...
+    minutes = int(round(snack.minutes + (snack.minutes_max - snack.minutes) * t))
+    return amount, minutes
+
+
+def snack_blurb(user, snack):
+    amount, minutes = snack_power(user, snack)
+    return snack.blurb.format(amount=f"{amount:g}", minutes=minutes)
+
+
 def snack_cost(user, snack):
+    """Cheap for new players (a quarter of the old price), full price once you're far along."""
     base = engine.ores_for_layer(user["layer"])[-1]
-    return snack.coins * scale(user), {"ore:" + base.key: snack.ore_qty}
+    t = progress(user)
+    coins = int(snack.coins * scale(user) * (0.25 + 0.75 * t))
+    return coins, {"ore:" + base.key: max(5, int(snack.ore_qty * (0.5 + 0.5 * t)))}
 
 
 @atomic
@@ -299,9 +326,11 @@ def eat_snack(db, uid, key):
     if db.qty(uid, "snack:" + key) <= 0:
         return False, f"You don't have any {snack.name}. Make some first."
     db.add_item(uid, "snack:" + key, -1)
-    db.add_buff(uid, snack.buff, snack.amount, snack.minutes * 60)
+    user = db.user(uid)
+    amount, minutes = snack_power(user, snack)
+    db.add_buff(uid, snack.buff, amount, minutes * 60)
     db.bump(uid, "snacks_eaten")
-    return True, f"{snack.emoji} You ate **{snack.name}**. {snack.blurb}"
+    return True, f"{snack.emoji} You ate **{snack.name}**. {snack_blurb(user, snack)}"
 
 
 # ================================================================ bounty board
@@ -505,7 +534,7 @@ def tim_price(user, deal, visit):
     if deal == "box":
         return 2_000 * s
     if deal == "snack":
-        return data.SNACKS[visit["snack"]].coins * s // 2
+        return snack_cost(user, data.SNACKS[visit["snack"] % len(data.SNACKS)])[0] // 2
     if deal == "rock":
         return 20_000 * s
     return 0
@@ -537,12 +566,12 @@ def tim_buy(db, uid, visit_id, idx):
     db.add_coins(uid, -price)
     db.bump(uid, "tim_deals")
     if deal == "fence":
-        coins = int(target.value * data.TIM_FENCE_MULT * engine.sell_mult(user))
+        coins = int(target.value * data.TIM_FENCE_MULT * engine.sell_mult(user, db))
         db.add_item(uid, "ore:" + target.key, -1)
         db.add_coins(uid, coins)
         return True, f"💼 Tim pockets your **{target.name}** and hands you **{coins:,}** coins. \"Pleasure.\"", None
     if deal == "snack":
-        snack = data.SNACKS[visit["snack"]]
+        snack = data.SNACKS[visit["snack"] % len(data.SNACKS)]
         db.add_item(uid, "snack:" + snack.key, 1)
         return True, f"🍪 You got {snack.emoji} **{snack.name}** for {price:,} coins. It's a little warm.", None
     if deal == "rock":
