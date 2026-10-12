@@ -318,8 +318,7 @@ class Game(commands.Cog):
             cut = status if len(status) <= 1024 else status[:status.rfind("\n", 0, 1024)]
             e.add_field(name="Status" if not e.fields or e.fields[-1].name != "Status" else "​", value=cut, inline=False)
             status = status[len(cut):].lstrip("\n")
-        files.append(depth_pic(layer.num))
-        e.set_image(url="attachment://depth.jpg")
+        # depth banner switched off for now (t, 2026-10-12): add depth_pic(layer.num) + set_image to bring it back
         return e, files, self.main_view(user, ready)
 
     def mines_panel(self, uid, note=None):
