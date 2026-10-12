@@ -451,6 +451,16 @@ RAID_LUCK = 3.0               # bonus luck on raid loot rolls
 DUEL_TIMEOUT = 120
 DUEL_COOLDOWN = 60
 
+# ---- Asteroid Run (v0.5.0): steer through a falling asteroid field with buttons, one row per press
+ASTEROID_LANES = 7
+ASTEROID_ROWS = 8             # rows on screen; the rocket sits on the bottom one
+ASTEROID_MOVES = 20           # survive this many moves to dock at Tim's station
+ASTEROID_FEE = 1_000          # x layer scale, paid when the run starts
+ASTEROID_BONUS = 3            # docking pays the fee back this many times
+ASTEROID_LUCK = 2.0           # bonus luck on the ore chunks you pick up
+ASTEROID_CHUNK_CHANCE = 0.5   # chance each new row has an ore chunk
+ASTEROID_COOLDOWN = 10 * 60
+
 # ---- Space Snacks (crafted from coins + your current layer's base ore, eaten for buffs)
 @dataclass(frozen=True)
 class Snack:

@@ -56,6 +56,7 @@ class Space(commands.Cog):
         self.checks = {}          # uid -> space.Check in progress
         self.duels = {}           # duel id -> (challenger, target, wager, expires)
         self.last_duel = {}
+        self.runs = {}            # uid -> space.AsteroidRun in progress
         self.live = []            # [kind, event id, expires, [messages]] for meteor/Tim posts to close later
         self.scheduler.start()
 
@@ -74,6 +75,8 @@ class Space(commands.Cog):
             await self.check_action(interaction, action[3:], uid)
         elif action == "ship":
             await self.show(interaction, self.ship_panel(uid))
+        elif action.startswith("ar_"):
+            await self.asteroid_action(interaction, action[3:], uid)
         elif action.startswith("shipup_"):
             ok, msg = space.upgrade_ship(self.db, uid, action[7:])
             await self.show(interaction, self.ship_panel(uid, ("✅ " if ok else "❌ ") + msg))
@@ -163,8 +166,98 @@ class Space(commands.Cog):
             v.add_item(B("shipup_" + up.key, uid, f"Upgrade {up.name}", up.emoji, discord.ButtonStyle.success,
                          disabled=user["ship_" + up.key] >= up.max_level))
         v.add_item(B("shippaint", uid, "Repaint", "🎨", row=1))
+        wait = space.asteroid_wait(self.db, uid)
+        v.add_item(B("ar_start", uid, "Asteroid Run" if wait <= 0 else f"Asteroid Run in {fmt_time(wait)}", "☄️",
+                     discord.ButtonStyle.primary, disabled=wait > 0, row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
         return e, files, v
+
+    # ================================================================ Asteroid Run
+
+    def asteroid_intro(self, uid, note=None):
+        user = self.db.user(uid)
+        fee = space.asteroid_fee(user)
+        e = discord.Embed(title="☄️ Asteroid Run", color=discord.Color.from_rgb(255, 170, 60), description=(
+            (note + "\n\n" if note else "") +
+            f"Fly through an asteroid field to Tim's station. Every press moves you one lane (or straight on) "
+            f"and every asteroid falls one row, so take your time and plan ahead.\n\n"
+            f"✨ Fly through glowing ore chunks to grab them (x{data.ASTEROID_LUCK:g} luck)\n"
+            f"🏁 Survive **{data.ASTEROID_MOVES}** moves to dock: keep every chunk + **{fee * data.ASTEROID_BONUS:,}** coins\n"
+            f"💥 Hit a rock: you keep half your chunks\n"
+            f"🏳️ Bail out any time: keep your chunks, no coin bonus"))
+        e.set_footer(text=f"Fuel costs {fee:,} coins · one run every {data.ASTEROID_COOLDOWN // 60} minutes · "
+                          f"You have {user['coins']:,} coins")
+        v = discord.ui.View(timeout=None)
+        wait = space.asteroid_wait(self.db, uid)
+        v.add_item(B("ar_go", uid, f"Launch ({fee:,} coins)" if wait <= 0 else f"Ready in {fmt_time(wait)}", "🚀",
+                     discord.ButtonStyle.success, disabled=wait > 0 or user["coins"] < fee))
+        v.add_item(B("ship", uid, "Back", "↩️"))
+        return e, [], v
+
+    def asteroid_panel(self, uid, run, note=None):
+        user = self.db.user(uid)
+        paint = data.PAINTS[user["ship_paint"] % len(data.PAINTS)][1]
+        left = data.ASTEROID_MOVES - run.moves
+        e = discord.Embed(title=f"☄️ {user['name']}'s Asteroid Run", color=discord.Color.from_rgb(*paint))
+        if run.done:
+            e.description = note
+        else:
+            e.description = (f"**{left}** move{'s' if left != 1 else ''} to Tim's station · "
+                             f"ore chunks: **{len(run.ores)}**" + (f"\n{note}" if note else ""))
+        e.set_image(url="attachment://run.jpg")
+        files = [discord.File(io.BytesIO(images.asteroid_board(run, paint)), filename="run.jpg")]
+        v = discord.ui.View(timeout=None)
+        if run.done:
+            v.add_item(B("ar_start", uid, "Again", "☄️", discord.ButtonStyle.primary))
+            v.add_item(B("back", uid, "Back to mine", "↩️"))
+        else:
+            v.add_item(B("ar_l", uid, None, "⬅️", discord.ButtonStyle.primary, disabled=run.lane == 0))
+            v.add_item(B("ar_s", uid, None, "⬆️", discord.ButtonStyle.primary))
+            v.add_item(B("ar_r", uid, None, "➡️", discord.ButtonStyle.primary, disabled=run.lane == data.ASTEROID_LANES - 1))
+            v.add_item(B("ar_bail", uid, "Bail out", "🏳️", discord.ButtonStyle.secondary))
+        return e, files, v
+
+    async def asteroid_action(self, interaction, what, uid):
+        if what == "start":
+            await self.show(interaction, self.asteroid_intro(uid))
+            return
+        if what == "go":
+            if uid in self.runs and not self.runs[uid].done:
+                await self.show(interaction, self.asteroid_panel(uid, self.runs[uid]))
+                return
+            run, why = space.start_asteroid_run(self.db, uid)
+            if not run:
+                await self.show(interaction, self.asteroid_intro(uid, "❌ " + why))
+                return
+            self.runs[uid] = run
+            await self.show(interaction, self.asteroid_panel(uid, run, "Steer with the arrows. Rocks fall one row per press."))
+            return
+        run = self.runs.get(uid)
+        if run is None or run.done:
+            await self.show(interaction, self.asteroid_intro(uid, "That run is over (the bot may have restarted)."))
+            return
+        if what == "bail":
+            space.finish_asteroid_run(self.db, run, bail=True)
+        else:
+            space.asteroid_step(run, {"l": -1, "s": 0, "r": 1}[what])
+        if not run.done:
+            await self.show(interaction, self.asteroid_panel(uid, run))
+            return
+        self.runs.pop(uid, None)
+        before = list(run.ores)
+        if run.state == "bailed":
+            kept, coins = before, 0
+        else:
+            kept, coins, _ = space.finish_asteroid_run(self.db, run)
+        haul = ore_summary(kept) if kept else "nothing"
+        if run.state == "docked":
+            note = f"🏁 **Docked at Tim's station!** +**{coins:,}** coins and your ore:\n{haul}"
+        elif run.state == "crashed":
+            note = (f"💥 **Crashed after {run.moves} moves!** You grabbed {len(before)} chunk(s) and kept "
+                    f"{len(kept)}:\n{haul}")
+        else:
+            note = f"🏳️ **Bailed out after {run.moves} moves.** You kept your ore:\n{haul}"
+        await self.show(interaction, self.asteroid_panel(uid, run, note))
 
     def snack_panel(self, uid, note=None):
         user = self.db.user(uid)

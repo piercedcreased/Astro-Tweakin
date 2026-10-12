@@ -571,3 +571,116 @@ def tim_buy(db, uid, visit_id, idx):
     best = engine.record_finds(db, uid, ores)
     names = ", ".join(o.name for o in ores)
     return True, f"📦 Inside: three shiny rocks (rolled at x25 luck): **{names}**.", best
+
+
+# ================================================================ Asteroid Run (v0.5.0)
+
+ROCK, CHUNK = "rock", "chunk"
+
+
+@dataclass
+class AsteroidRun:
+    uid: int
+    layer: int
+    luck: float
+    fee: int
+    lane: int = data.ASTEROID_LANES // 2
+    moves: int = 0
+    grid: list = field(default_factory=list)      # grid[row][lane] = None / ROCK / CHUNK, row 0 is the top
+    ores: list = field(default_factory=list)      # ores picked up so far
+    state: str = "flying"                         # flying, crashed, docked, bailed
+    hit_at: tuple = None                          # (row, lane) of the rock that got you
+    seed: int = 0
+
+    @property
+    def done(self):
+        return self.state != "flying"
+
+
+def _asteroid_row(moves):
+    """A new row coming in at the top. It gets busier the further you get."""
+    row = [None] * data.ASTEROID_LANES
+    rocks = rng.randint(1, min(3, 1 + moves // 6))
+    for c in rng.sample(range(data.ASTEROID_LANES), rocks):
+        row[c] = ROCK
+    free = [c for c in range(data.ASTEROID_LANES) if row[c] is None]
+    if free and rng.random() < data.ASTEROID_CHUNK_CHANCE:
+        row[rng.choice(free)] = CHUNK
+    return row
+
+
+def asteroid_wait(db, uid):
+    last = float(db.meta(f"asteroid:{uid}", 0) or 0)
+    return max(0.0, last + data.ASTEROID_COOLDOWN - time.time())
+
+
+def asteroid_fee(user):
+    return data.ASTEROID_FEE * data.scale(user["layer"])
+
+
+@atomic
+def start_asteroid_run(db, uid):
+    """Pays the fee and returns (AsteroidRun, None), or (None, reason)."""
+    user = db.user(uid)
+    wait = asteroid_wait(db, uid)
+    if wait > 0:
+        return None, f"Your rocket is still cooling down. Next run in {engine.fmt_time(wait)}."
+    fee = asteroid_fee(user)
+    if user["coins"] < fee:
+        return None, f"A run costs **{fee:,}** coins of fuel. You have {user['coins']:,}."
+    db.add_coins(uid, -fee)
+    db.set_meta(f"asteroid:{uid}", str(time.time()))
+    db.bump(uid, "asteroid_runs")
+    run = AsteroidRun(uid, user["layer"], engine.luck_for(db, user).total * data.ASTEROID_LUCK, fee, seed=rng.randint(1, 10**9))
+    # the first rows are empty so you get a moment to see what's coming
+    empty = data.ASTEROID_ROWS // 2
+    run.grid = [_asteroid_row(0) for _ in range(data.ASTEROID_ROWS - empty)] + \
+               [[None] * data.ASTEROID_LANES for _ in range(empty)]
+    return run, None
+
+
+def _land(run):
+    """Checks what's in the rocket's cell."""
+    row = data.ASTEROID_ROWS - 1
+    cell = run.grid[row][run.lane]
+    if cell == ROCK:
+        run.state = "crashed"
+        run.hit_at = (row, run.lane)
+    elif cell == CHUNK:
+        run.ores.append(engine.roll_ore(run.layer, run.luck))
+        run.grid[row][run.lane] = None
+
+
+def asteroid_step(run, move):
+    """move: -1 left, 0 straight, +1 right. Everything falls one row."""
+    if run.done:
+        return
+    run.lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
+    _land(run)                      # steering into a rock beside you counts
+    if run.done:
+        return
+    run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
+    _land(run)
+    run.moves += 1
+    if not run.done and run.moves >= data.ASTEROID_MOVES:
+        run.state = "docked"
+
+
+@atomic
+def finish_asteroid_run(db, run, bail=False):
+    """Pays out. Docking: every chunk + the fee back ASTEROID_BONUS times. Bailing: your chunks, no bonus.
+    Crashing: half your chunks (rounded up). Returns (ores kept, coins, best ore or None)."""
+    if bail and not run.done:
+        run.state = "bailed"
+    kept = list(run.ores)
+    coins = 0
+    if run.state == "crashed":
+        rng.shuffle(kept)
+        kept = kept[:(len(kept) + 1) // 2]
+        db.bump(run.uid, "asteroid_crashes")
+    elif run.state == "docked":
+        coins = run.fee * data.ASTEROID_BONUS
+        db.add_coins(run.uid, coins)
+        db.bump(run.uid, "asteroid_docks")
+    best = engine.record_finds(db, run.uid, kept) if kept else None
+    return kept, coins, best

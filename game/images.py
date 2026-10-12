@@ -1008,3 +1008,97 @@ def mutated_thumb(ore, mut_key):
         img.quantize(colors=128, method=Image.Quantize.FASTOCTREE).save(buf, "PNG", optimize=True)
         _THUMBS[k] = buf.getvalue()
     return _THUMBS[k]
+
+
+# ================================================================ v0.5.0: Asteroid Run
+
+def _rock(d, cx, cy, r, seed):
+    rr = random.Random(seed)
+    pts = []
+    for k in range(9):
+        a = 2 * math.pi * k / 9 + rr.uniform(-0.2, 0.2)
+        rad = r * rr.uniform(0.75, 1.05)
+        pts.append((cx + rad * math.cos(a), cy + rad * math.sin(a)))
+    d.polygon(pts, fill=(105, 95, 90), outline=(40, 35, 35), width=3)
+    for _ in range(3):
+        x, y, s = cx + rr.uniform(-r / 2, r / 2), cy + rr.uniform(-r / 2, r / 2), rr.uniform(r * 0.12, r * 0.25)
+        d.ellipse([x - s, y - s, x + s, y + s], fill=(75, 68, 65))
+
+
+def _chunk(img, cx, cy, r, t):
+    glow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    g = r * (1.5 + 0.2 * math.sin(t))
+    gd.ellipse([cx - g, cy - g, cx + g, cy + g], fill=(255, 210, 80, 90))
+    img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(6)))
+    d = ImageDraw.Draw(img)
+    d.polygon([(cx, cy - r), (cx + r * 0.7, cy - r * 0.1), (cx + r * 0.4, cy + r * 0.8), (cx - r * 0.4, cy + r * 0.8),
+               (cx - r * 0.7, cy - r * 0.1)], fill=(255, 200, 60), outline=(120, 70, 0), width=3)
+    d.polygon([(cx, cy - r), (cx + r * 0.7, cy - r * 0.1), (cx, cy + r * 0.1)], fill=(255, 240, 170))
+
+
+def _rocket_top(d, cx, cy, s, paint, flame=True):
+    """Small rocket seen from above, nose pointing up."""
+    dark = _dark(paint, 0.4)
+    if flame:
+        d.polygon([(cx - 8 * s, cy + 22 * s), (cx, cy + 40 * s), (cx + 8 * s, cy + 22 * s)], fill=(255, 150, 40))
+        d.polygon([(cx - 4 * s, cy + 22 * s), (cx, cy + 32 * s), (cx + 4 * s, cy + 22 * s)], fill=(255, 240, 170))
+    d.polygon([(cx - 22 * s, cy + 22 * s), (cx - 10 * s, cy), (cx - 10 * s, cy + 22 * s)], fill=dark)
+    d.polygon([(cx + 22 * s, cy + 22 * s), (cx + 10 * s, cy), (cx + 10 * s, cy + 22 * s)], fill=dark)
+    d.rounded_rectangle([cx - 11 * s, cy - 12 * s, cx + 11 * s, cy + 24 * s], radius=int(9 * s), fill=paint,
+                        outline=(20, 20, 30), width=2)
+    d.polygon([(cx - 11 * s, cy - 8 * s), (cx, cy - 30 * s), (cx + 11 * s, cy - 8 * s)], fill=paint, outline=(20, 20, 30))
+    d.ellipse([cx - 6 * s, cy - 8 * s, cx + 6 * s, cy + 4 * s], fill=(170, 230, 255), outline=(230, 230, 240), width=2)
+
+
+def asteroid_board(run, paint=(220, 60, 60)):
+    """The Asteroid Run screen: the falling field, your rocket at the bottom and a distance bar."""
+    from .data import ASTEROID_LANES, ASTEROID_ROWS, ASTEROID_MOVES
+    cell, top, side = 62, 46, 24
+    W, H = side * 2 + cell * ASTEROID_LANES, top + cell * ASTEROID_ROWS + 10
+    img = _space_bg(W, H, f"ar{run.seed}{run.moves}", stars=90).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    for c in range(1, ASTEROID_LANES):
+        x = side + c * cell
+        for y in range(top, H - 10, 14):
+            d.line([(x, y), (x, y + 5)], fill=(60, 55, 90), width=1)
+    left = ASTEROID_MOVES - run.moves
+    if left <= ASTEROID_ROWS - 1 and run.state != "crashed":
+        # Tim's station comes into view near the end
+        y = top + (ASTEROID_ROWS - 1 - left) * cell
+        d.rounded_rectangle([side, y - 18, W - side, y + 6], radius=10, fill=(70, 200, 110), outline=(20, 80, 40), width=3)
+        d.text((W / 2, y - 6), "TIM'S STATION", font=font(16), fill=(10, 40, 20), anchor="mm")
+    for r, row in enumerate(run.grid):
+        for c, what in enumerate(row):
+            cx, cy = side + c * cell + cell / 2, top + r * cell + cell / 2
+            if what == "rock":
+                _rock(d, cx, cy, cell * 0.38, f"{run.seed}:{run.moves - r}:{c}")
+            elif what == "chunk":
+                _chunk(img, cx, cy, cell * 0.24, run.moves + c)
+                d = ImageDraw.Draw(img)
+    sx, sy = side + run.lane * cell + cell / 2, top + (ASTEROID_ROWS - 1) * cell + cell / 2 - 4
+    if run.state == "crashed":
+        for k, (col, rad) in enumerate([((255, 80, 20), 34), ((255, 170, 40), 24), ((255, 245, 180), 12)]):
+            pts = [(sx + rad * (1.0 if i % 2 else 0.5) * math.cos(math.pi * i / 6),
+                    sy + rad * (1.0 if i % 2 else 0.5) * math.sin(math.pi * i / 6)) for i in range(12)]
+            d.polygon(pts, fill=col)
+    else:
+        _rocket_top(d, sx, sy, 1.0, paint, flame=True)
+    # header: distance bar + haul
+    d.rectangle([0, 0, W, top - 6], fill=(12, 10, 26))
+    frac = run.moves / ASTEROID_MOVES
+    d.rounded_rectangle([side, 12, W - 150, 30], radius=9, fill=(40, 40, 55), outline=(90, 90, 110), width=2)
+    if frac > 0:
+        d.rounded_rectangle([side + 2, 14, side + 2 + int((W - 150 - side - 4) * frac), 28], radius=7, fill=(90, 230, 120))
+    _outlined(d, (W - 16, 21), f"ORE x{len(run.ores)}", 20, (255, 210, 80), anchor="rm", stroke=3)
+    stamp = {"crashed": ("CRASHED!", (255, 70, 50)), "docked": ("DOCKED!", (90, 240, 130)),
+             "bailed": ("BAILED OUT", (255, 220, 80))}.get(run.state)
+    if stamp:
+        st = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(st)
+        sd.text((W / 2, H / 2), stamp[0], font=font(_fit(stamp[0], W - 60, 64)), fill=stamp[1] + (240,), anchor="mm",
+                stroke_width=5, stroke_fill=(0, 0, 0, 255))
+        img.alpha_composite(st.rotate(10, resample=Image.BICUBIC))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue()

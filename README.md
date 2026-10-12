@@ -37,6 +37,7 @@ Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/lead
 | 🚀 `/ship` | Hidden Compartments (fewer checks), Reinforced Hull (raid defense), Turbo Engine (raids and duels), paint. |
 | 🏴‍☠️ `/raid @player` | Luck check for stuff they "forgot" on their ship. The target never loses anything. |
 | ⚔️ `/duel @player [bet]` | Best-of-3 laser duel, optional coin bet both players agree to. |
+| ☄️ Asteroid Run | Solo minigame from the 🚀 Ship menu: steer through falling rocks with ⬅️ ⬆️ ➡️ (one row per press), grab ore chunks, dock at Tim's station after 20 moves for 3x the fuel fee. Tuning is `ASTEROID_*` in `game/data.py`. |
 | 🍬 `/snacks` | Cook boosts from coins + your layer's base ore. |
 | 📜 `/bounties` | Three daily jobs. |
 | 🏆 `/achievements`, `/title` | Every achievement is a title you can wear. |
