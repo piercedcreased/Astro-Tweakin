@@ -1442,3 +1442,81 @@ def rps_card(names, avatars, states, winner=None, tie=False, banner=None):
             _outlined(d, (bx + BOX / 2, cy), "?", 80, (200, 190, 240), stroke=5)
     _outlined(d, (W / 2, cy), "TIE" if tie else "VS", 30 if tie else 34, (255, 120, 120) if tie else (255, 255, 255), stroke=4)
     return _png(img.convert("RGB"))
+
+
+# ---------------------------------------------------------------- Space Jack table
+
+def _suit(d, suit, cx, cy, s, col):
+    """♠♥♦♣ drawn as shapes (the GIF fonts on Windows don't all have the suit symbols)."""
+    if suit == "♦":
+        d.polygon([(cx, cy - s), (cx + s * .72, cy), (cx, cy + s), (cx - s * .72, cy)], fill=col)
+    elif suit == "♥":
+        r = s * .5
+        d.ellipse([cx - s, cy - s * .75, cx - s + 2 * r, cy - s * .75 + 2 * r], fill=col)
+        d.ellipse([cx + s - 2 * r, cy - s * .75, cx + s, cy - s * .75 + 2 * r], fill=col)
+        d.polygon([(cx - s * .97, cy - s * .2), (cx + s * .97, cy - s * .2), (cx, cy + s)], fill=col)
+    elif suit == "♠":
+        r = s * .5
+        d.ellipse([cx - s, cy - s * .25, cx - s + 2 * r, cy - s * .25 + 2 * r], fill=col)
+        d.ellipse([cx + s - 2 * r, cy - s * .25, cx + s, cy - s * .25 + 2 * r], fill=col)
+        d.polygon([(cx - s * .97, cy + s * .2), (cx + s * .97, cy + s * .2), (cx, cy - s)], fill=col)
+        d.polygon([(cx, cy + s * .2), (cx - s * .4, cy + s), (cx + s * .4, cy + s)], fill=col)
+    else:
+        r = s * .42
+        for ox, oy in ((0, -s * .5), (-s * .5, s * .1), (s * .5, s * .1)):
+            d.ellipse([cx + ox - r, cy + oy - r, cx + ox + r, cy + oy + r], fill=col)
+        d.polygon([(cx, cy), (cx - s * .4, cy + s), (cx + s * .4, cy + s)], fill=col)
+
+
+def _card(img, x, y, card, w=72, h=104, hidden=False):
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([x + 3, y + 4, x + w + 3, y + h + 4], radius=9, fill=(0, 0, 0))
+    if hidden:
+        d.rounded_rectangle([x, y, x + w, y + h], radius=9, fill=(110, 60, 190), outline=(255, 255, 255), width=3)
+        for i in range(-h, w, 12):
+            d.line([(x + max(0, i), y + max(0, -i)), (x + min(w, i + h), y + min(h, h - i + i - max(0, i) + max(0, -i)))],
+                   fill=(140, 90, 220), width=3)
+        _outlined(d, (x + w / 2, y + h / 2), "?", 40, (255, 255, 255), stroke=3)
+        return
+    rank, suit = card[:-1], card[-1]
+    col = (210, 30, 45) if suit in "♥♦" else (25, 25, 35)
+    d.rounded_rectangle([x, y, x + w, y + h], radius=9, fill=(250, 250, 245), outline=(60, 60, 70), width=2)
+    d.text((x + 8, y + 5), rank, font=font(22), fill=col)
+    _suit(d, suit, x + 15 + (6 if rank == "10" else 0), y + 38, 7, col)
+    _suit(d, suit, x + w / 2 + 4, y + h * .62, 18, col)
+
+
+def jack_table(dealer, player, dealer_total, player_total, hide_second=True, result=None, bet=0):
+    """The Space Jack table: Tim's hand on top, yours at the bottom, each with its total."""
+    W, H = 640, 360
+    img = _space_bg(W, H, "jack", top=(8, 40, 30), bottom=(14, 70, 48), stars=40).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([12, 12, W - 12, H - 12], radius=26, outline=(200, 170, 80), width=4)
+
+    def row(cards, y, label, total, hide):
+        n = len(cards)
+        cw, gap = 72, 14
+        x0 = W / 2 - (n * cw + (n - 1) * gap) / 2 + 40
+        for i, c in enumerate(cards):
+            _card(img, int(x0 + i * (cw + gap)), y, c, hidden=hide and i == 1)
+        dd = ImageDraw.Draw(img)
+        bx = 40
+        dd.rounded_rectangle([bx, y + 18, bx + 110, y + 86], radius=14, fill=(0, 0, 0, 160) if False else (10, 30, 22),
+                             outline=(200, 170, 80), width=3)
+        _outlined(dd, (bx + 55, y + 34), label, 18, (230, 220, 180), stroke=3)
+        bust = isinstance(total, int) and total > 21
+        _outlined(dd, (bx + 55, y + 64), str(total), 34, (255, 90, 90) if bust else (255, 255, 255), stroke=4)
+
+    row(dealer, 34, "TIM", dealer_total, hide_second)
+    row(player, H - 34 - 104, "YOU", player_total, False)
+    if result:
+        text, colr = result
+        size = _fit(text, W - 120, 40)
+        tw = font(size).getlength(text)
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle([W / 2 - tw / 2 - 22, H / 2 - 30, W / 2 + tw / 2 + 22, H / 2 + 30], radius=16,
+                            fill=(15, 15, 25), outline=colr, width=4)
+        _outlined(d, (W / 2, H / 2), text, size, colr, stroke=4)
+    elif bet:
+        _outlined(d, (W / 2 + 40, H / 2), f"BET {bet:,}", 22, (230, 220, 180), stroke=3)
+    return _png(img.convert("RGB"))

@@ -326,10 +326,6 @@ class Features(commands.Cog):
         v.add_item(B("back", uid, "Back", "↩️"))
         return e, [], v
 
-    @staticmethod
-    def _cards(hand, hide_second=False):
-        return "  ".join(("🂠" if hide_second and i == 1 else f"`{c}`") for i, c in enumerate(hand))
-
     def jack_panel(self, uid, h, note=None):
         user = self.db.user(uid)
         hide = not h.done
@@ -339,10 +335,17 @@ class Features(commands.Cog):
         color = {"won": discord.Color.green(), "blackjack": discord.Color.gold(), "push": discord.Color.light_grey(),
                  "lost": discord.Color.red()}.get(h.state, discord.Color.dark_green())
         e = discord.Embed(title="🃏 Space Jack", color=color)
-        e.add_field(name=f"👽 Tim ({dealer_total})", value=self._cards(h.dealer, hide), inline=False)
-        e.add_field(name=f"🧑‍🚀 You ({features.hand_total(h.player)})", value=self._cards(h.player), inline=False)
+        mine = features.hand_total(h.player)
+        if hide:
+            dealer_total = f"{features.hand_total(h.dealer[:1])}+?"
+        banner = {"won": (f"YOU WIN +{h.bet * 2:,}", (110, 255, 140)), "blackjack": (f"BLACKJACK! +{h.bet * 5 // 2:,}", (255, 210, 60)),
+                  "push": ("PUSH", (220, 220, 230)), "lost": ("BUST!" if mine > 21 else "TIM WINS", (255, 90, 90))}.get(h.state)
+        key = f"jack:{','.join(h.dealer)}:{','.join(h.player)}:{hide}:{h.state}:{h.bet}"
+        files = [Pic("jack.png", key, lambda: images.jack_table(h.dealer, h.player, dealer_total if hide else int(dealer_total),
+                                                               mine, hide, banner, h.bet))]
+        e.set_image(url="attachment://jack.png")
         lines = [note] if note else []
-        lines.append(result.get(h.state, f"Bet: **{h.bet:,}** coins. Hit, stand or double?"))
+        lines.append(result.get(h.state, f"You have **{mine}**. Bet: **{h.bet:,}** coins. Hit, stand or double?"))
         e.description = "\n".join(lines)
         e.set_footer(text=f"You have {user['coins']:,} coins · Tim stands on 17")
         v = discord.ui.View(timeout=None)
@@ -358,7 +361,7 @@ class Features(commands.Cog):
             v.add_item(B("bj_stand", uid, "Stand", "✋", discord.ButtonStyle.secondary))
             v.add_item(B("bj_double", uid, "Double", "💰", discord.ButtonStyle.success,
                          disabled=len(h.player) != 2 or user["coins"] < h.bet))
-        return e, [], v
+        return e, files, v
 
     async def jack_action(self, interaction, what, uid):
         note = None
