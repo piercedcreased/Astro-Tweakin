@@ -740,15 +740,15 @@ def _land(run, how):
 
 
 def asteroid_step(run, move):
-    """move: -1 left, 0 straight, +1 right. Everything falls one row."""
+    """move: -1 up-left, 0 straight up, +1 up-right. Everything falls one row and the rocket moves into its new
+    lane in the same step, so a sideways move is diagonal: a rock right beside you can't hit you, only the rock
+    in the cell you're heading for can."""
     if run.done:
         return
-    run.lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
-    _land(run, "steered")           # steering into a rock beside you counts
-    if run.done:
-        return
+    old = run.lane
     run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
-    _land(run, "fell")
+    run.lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
+    _land(run, "steered" if run.lane != old else "fell")
     run.moves += 1
     if not run.done and run.moves >= data.ASTEROID_MOVES:
         run.state = "docked"
