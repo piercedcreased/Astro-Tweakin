@@ -78,9 +78,12 @@ def rarest_mut(muts):
     return max(muts, key=lambda om: (om[1].chance, om[0].chance)) if muts else None
 
 
-def ore_line(ore, n=None):
+def ore_line(ore, n=None, layer=None):
+    """layer: show the odds on that layer (Uncommon to Epic ores get easier deeper) instead of its first layer."""
     count = f" x{n:,}" if n and n > 1 else ""
-    return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {fmt_chance(ore)}"
+    odds = fmt_chance(engine.layer_chance(ore, layer)) if layer in ore.layers and ore.tier in data.DEPTH_EASE_TIERS \
+        else fmt_chance(ore)
+    return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {odds}"
 
 
 def shout_line(name, ore):
@@ -284,7 +287,7 @@ class Game(commands.Cog):
         if ores:
             best = max(ores, key=lambda o: o.chance)
             counts = collections.Counter(o.key for o in ores)
-            e.description = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in
+            e.description = "\n".join(ore_line(ORE_BY_KEY[k], n, user["layer"]) for k, n in
                                       sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance))
             e.color = color_of(best.tier_info.color) if best.tier != "common" else e.color
             # pictures are only uploaded when they change (see show()), so this stays fast
@@ -869,7 +872,7 @@ class Game(commands.Cog):
         sold = engine.autosell(self.db, uid)
         counts = collections.Counter(o.key for o in ores)
         top = sorted(counts.items(), key=lambda kv: -ORE_BY_KEY[kv[0]].chance)[:8]
-        lines = "\n".join(ore_line(ORE_BY_KEY[k], n) for k, n in top)
+        lines = "\n".join(ore_line(ORE_BY_KEY[k], n, self.db.user(uid)["layer"]) for k, n in top)
         more = len(counts) - len(top)
         head = f"🐌 Your sluglings dug **{len(ores):,}** ores over {fmt_time(elapsed)}:\n{lines}" + (f"\n…and {more} more kinds" if more > 0 else "") \
             + (f"\n♻️ Auto-sold for **{sold:,}** coins" if sold else "")

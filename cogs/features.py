@@ -230,7 +230,7 @@ class Features(commands.Cog):
                 if res.muts:
                     text += "\n" + "\n".join(mut_line(o, m) for o, m in res.muts)
                 if res.ores and res.kind == "ores":
-                    text += "\n" + "\n".join(ore_line(o) for o in sorted(res.ores, key=lambda o: -o.chance)[:6])
+                    text += "\n" + "\n".join(ore_line(o, None, self.db.user(uid)["layer"]) for o in sorted(res.ores, key=lambda o: -o.chance)[:6])
                 e, _, v = self.crates_panel(uid, text)
                 e.set_image(url="attachment://crate.gif")
                 msg = await interaction.original_response()
