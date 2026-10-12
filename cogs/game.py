@@ -4,6 +4,7 @@ import collections
 import io
 import logging
 import time
+import types
 
 import discord
 from discord import app_commands
@@ -11,7 +12,7 @@ from discord.ext import commands
 
 from game import data, engine, images, space
 from game.db import NotEnough
-from game.data import LAYERS, ORE_BY_KEY, PARTS, PART_BY_KEY, PICKAXE_BY_KEY, PLANETS, REALMS, TIERS, TIER_ORDER
+from game.data import LAYERS, ORE_BY_KEY, PARTS, PART_BY_KEY, PICKAXE_BY_KEY, PLANETS, TIERS, TIER_ORDER
 from game.engine import fmt_chance, fmt_time
 
 log = logging.getLogger("astro-tweakin.game")
@@ -136,6 +137,64 @@ class PanelSelect(discord.ui.DynamicItem[discord.ui.Select], template=r"cs_sel:(
         await interaction.client.get_cog("Game").handle(interaction, self.action, self.uid)
 
 
+class _CtxResponse:
+    def __init__(self, it):
+        self.it = it
+        self._done = False
+
+    def is_done(self):
+        return self._done
+
+    async def send_message(self, content=None, **kw):
+        self._done = True
+        self.it._sent = await self.it._send(content, **kw)
+
+    async def defer(self, **kw):
+        self._done = True
+
+    async def edit_message(self, **kw):
+        self._done = True
+        if self.it._sent:
+            await self.it._sent.edit(**{k: v for k, v in kw.items() if k in ("content", "embed", "embeds", "attachments", "view")})
+
+
+class CtxInteraction:
+    """Lets a ; chat command run the same code as its slash command: looks enough like a discord.Interaction
+    for our commands, and turns their replies into normal channel messages (ephemeral ones vanish after a minute)."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.user = ctx.author
+        self.guild = ctx.guild
+        self.guild_id = ctx.guild.id if ctx.guild else None
+        self.channel = ctx.channel
+        self.channel_id = ctx.channel.id if ctx.channel else None
+        self.client = ctx.bot
+        self.message = None
+        self.command = None
+        self.extras = {}
+        self._sent = None
+        self.response = _CtxResponse(self)
+        self.followup = types.SimpleNamespace(send=self._followup)
+
+    async def _send(self, content=None, *, ephemeral=False, wait=None, **kw):
+        kw = {k: v for k, v in kw.items() if k in ("embed", "embeds", "file", "files", "view", "allowed_mentions")}
+        if ephemeral:
+            kw.pop("view", None)
+            return await self.ctx.reply(content, mention_author=False, delete_after=60, **kw)
+        return await self.ctx.send(content, **kw)
+
+    async def _followup(self, content=None, **kw):
+        return await self._send(content, **kw)
+
+    async def edit_original_response(self, **kw):
+        if self._sent:
+            return await self._sent.edit(**{k: v for k, v in kw.items() if k in ("content", "embed", "embeds", "attachments", "view")})
+
+    async def original_response(self):
+        return self._sent
+
+
 class Game(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -172,19 +231,26 @@ class Game(commands.Cog):
         ev = self.db.event()
         if ev:
             lines.append(f"🎉 Server event: **{ev['label']}** x{ev['luck']:g} luck ({fmt_time(ev['expires'] - time.time())})")
+        w = engine.user_weather(user)
+        lines.append(f"{w.emoji} Weather: **{w.name}**" + (f" ({w.blurb})" if w.key != "clear" else "")
+                     + f" · {fmt_time(engine.weather_ends() - time.time())} left")
+        ench = engine.enchants(self.db, uid)
+        if ench:
+            lines.append("✨ " + "  ·  ".join(engine.enchant_text(r["ench"], r["level"]).replace("**", "").split(":")[0]
+                                             for r in ench.values()))
         for label, frac in engine.goals(self.db, uid):
             lines.append(f"🎯 {label}  {engine.bar(frac)} {int(frac * 100)}%")
         if user["sluglings"]:
-            waiting = min(time.time() - user["last_collect"], data.COLLECT_CAP_HOURS * 3600)
-            n = int(waiting // data.SLUGLING_SECONDS_PER_ROLL) * user["sluglings"]
-            lines.append(f"🐌 {user['sluglings']} slugling(s) have dug **{n:,}** ore for you")
+            waiting = min(time.time() - user["last_collect"], engine.collect_cap(user) * 3600)
+            n = engine.slug_output(self.db, user, waiting)
+            rank = data.SLUG_RANKS[user["slug_rank"]]
+            lines.append(f"{rank[1]} {user['sluglings']} {rank[0].lower()} have dug **{n:,}** ore for you")
         return "\n".join(lines)
 
     def bounties_ready(self, uid):
         """How many of today's bounties are finished but not cashed in yet."""
         try:
-            return sum(1 for r in space.bounties(self.db, uid)
-                       if not r["claimed"] and space.bounty_progress(self.db, r) >= r["need"])
+            return space.bounties_ready(self.db, uid)
         except Exception:
             log.exception("Couldn't count ready bounties for %s", uid)
             return 0
@@ -197,6 +263,7 @@ class Game(commands.Cog):
         v.add_item(B("roll", uid, "Lucky Roll" if roll_wait <= 0 else f"Roll in {fmt_time(roll_wait)}", "🎰",
                      discord.ButtonStyle.primary, disabled=roll_wait > 0))
         v.add_item(B("collect", uid, "Collect", "🐌", disabled=user["sluglings"] == 0))
+        v.add_item(B("arcade", uid, "Arcade", "🎮"))
         v.add_item(B("mines", uid, "Mines", "🕳️", row=1))
         v.add_item(B("inv", uid, "Inventory", "🎒", row=1))
         v.add_item(B("shop", uid, "Shop", "🛒", row=1))
@@ -234,7 +301,12 @@ class Game(commands.Cog):
             e.description = (e.description or "") + f"\n\n📜 **{ready} bounty{' is' if ready == 1 else 'ies are'} ready to claim!** (👤 Player → Bounties)"
         if note:
             e.add_field(name="​", value=note, inline=False)
-        e.add_field(name="Status", value=self.status_text(user), inline=False)
+        status = self.status_text(user)
+        while status:
+            # an embed field holds 1024 characters; spill long statuses into a second field
+            cut = status if len(status) <= 1024 else status[:status.rfind("\n", 0, 1024)]
+            e.add_field(name="Status" if not e.fields or e.fields[-1].name != "Status" else "​", value=cut, inline=False)
+            status = status[len(cut):].lstrip("\n")
         files.append(depth_pic(layer.num))
         e.set_image(url="attachment://depth.jpg")
         return e, files, self.main_view(user, ready)
@@ -288,7 +360,10 @@ class Game(commands.Cog):
                      discord.ButtonStyle.success if ready else discord.ButtonStyle.secondary))
         v.add_item(B("trophies", uid, "Achievements", "🏆"))
         v.add_item(B("lb", uid, "Leaderboard", "📊"))
-        v.add_item(B("back", uid, "Back", "↩️"))
+        day, wait, _ = engine.calendar_state(user)
+        v.add_item(B("cal", uid, f"Daily (day {day} ready!)" if wait <= 0 else "Daily", "📅",
+                     discord.ButtonStyle.success if wait <= 0 else discord.ButtonStyle.secondary))
+        v.add_item(B("back", uid, "Back", "↩️", row=1))
         return e, [], v
 
     def settings_panel(self, uid, note=None):
@@ -326,7 +401,8 @@ class Game(commands.Cog):
                         value=f"{L.cost:,} coins · x{L.luck} layer luck, new ores{mats}", inline=False)
         cost = engine.slugling_cost(user["sluglings"])
         e.add_field(name=f"🐌 Hire slugling #{user['sluglings'] + 1}",
-                    value=f"{cost:,} coins · digs 1 ore/min while you're away (up to {data.COLLECT_CAP_HOURS}h)", inline=False)
+                    value=f"{cost:,} coins · digs while you're away (up to {engine.collect_cap(user)}h). "
+                          "Prestige and backpacks in the 🐌 Slug Den.", inline=False)
         smeltable = ", ".join(f"{self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR}x {n}"
                               for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR)
         e.add_field(name="🔥 Smelter", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more. "
@@ -341,6 +417,9 @@ class Game(commands.Cog):
         v.add_item(B("hire", uid, "Hire slugling", "🐌", discord.ButtonStyle.success))
         v.add_item(B("smelter", uid, "Smelter", "🔥"))
         v.add_item(B("workshop", uid, "Workshop", "🔧", row=1))
+        v.add_item(B("en", uid, "Enchant", "✨", row=1))
+        v.add_item(B("sl", uid, "Slug Den", "🐌", row=1))
+        v.add_item(B("cr", uid, "Crates", "📦", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
         goals = engine.goals(self.db, uid)
         key = f"shop:{user['coins']}:{nxt.key if nxt else ''}:{goals}"
@@ -420,9 +499,15 @@ class Game(commands.Cog):
                 m, o = engine.split_mut(key)
                 by_tier["muts"].append((m.chance * o.chance, f"{lk(item)}{m.emoji} {m.name} {o.name} x{q:,}"))
                 worth += o.value * m.mult * q
-        for t in ["muts"] + list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
+            elif kind == "crate":
+                c = data.CRATE_BY_KEY[key]
+                by_tier["special"].append((c.price or 10 ** 9, f"{c.emoji} {c.name} x{q:,}"))
+            elif kind == "rock":
+                by_tier["special"].append((10 ** 10, f"💎 Enchanted Crack Rock x{q:,}"))
+        for t in ["special", "muts"] + list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
             if by_tier.get(t):
-                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks", "muts": "🧬 Mutations"}.get(t) \
+                name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks", "muts": "🧬 Mutations",
+                        "special": "✨ Special"}.get(t) \
                     or f"{TIER_EMOJI[t]} {TIERS[t].name}"
                 val = ", ".join(s for _, s in sorted(by_tier[t], reverse=True))
                 e.add_field(name=name, value=val[:1024], inline=False)
@@ -436,6 +521,8 @@ class Game(commands.Cog):
         v.add_item(B("snacks", uid, "Snacks", "🍬"))
         v.add_item(B("ship", uid, "Ship", "🚀"))
         v.add_item(B("back", uid, "Back", "↩️"))
+        v.add_item(B("cr", uid, "Crates", "📦", row=3))
+        v.add_item(B("en", uid, "Enchant", "✨", row=3))
         sellable = [(i, q) for i, q in items.items() if i.split(":", 1)[0] in ("ore", "bar", "mut") and i not in locked]
         if sellable:
             # commonest first: that's usually what you want gone
@@ -494,7 +581,7 @@ class Game(commands.Cog):
                                                     ephemeral=True)
             return
         lock = self.locks[uid]
-        if lock.locked() and action == "mine":
+        if lock.locked() and (action == "mine" or action.startswith("ar_")):
             # still busy with your last press: drop this one quietly instead of queueing it
             await self.ack(interaction)
             return
@@ -573,7 +660,10 @@ class Game(commands.Cog):
             await fn(interaction, uid)
             return
         sp = self.bot.get_cog("Space")
-        if not (sp and await sp.dispatch(interaction, action, uid)):
+        if sp and await sp.dispatch(interaction, action, uid):
+            return
+        ft = self.bot.get_cog("Features")
+        if not (ft and await ft.dispatch(interaction, action, uid)):
             await self.ack(interaction)
 
     async def show(self, interaction, panel):
@@ -613,11 +703,27 @@ class Game(commands.Cog):
         if wait > 0:
             await self.ack(interaction)   # too fast: quietly ignore the click, no popup
             return
+        ft = self.bot.get_cog("Features")
+        if ft and uid in ft.minigames:
+            # a minigame is waiting: answer it first (it's quick, and you always get something)
+            await ft.start_minigame(interaction, uid)
+            return
         user = self.db.user(uid)
         self.next_swing[uid] = time.time() + engine.cooldown_for(self.db, user)
         res = engine.swing(self.db, uid)
-        head = f"♻️ Auto-sold for **{res.autosold:,}** coins" if res.autosold else None
-        await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores, muts=res.mutations))
+        heads = []
+        if res.crack:
+            heads.append("💎 **You found an ENCHANTED CRACK ROCK!** Use it in ✨ Enchant (Shop) to empty enchant slots.")
+        if res.echoed:
+            heads.append("🔁 **Echo!** This swing dug double.")
+        if res.autosold:
+            heads.append(f"♻️ Auto-sold for **{res.autosold:,}** coins")
+        head = "\n".join(heads) or None
+        if res.minigame and ft:
+            found = ", ".join(f"{o.name}" for o in sorted(res.ores, key=lambda o: -o.chance)[:5])
+            await ft.start_minigame(interaction, uid, head=(head + "\n" if head else "") + f"⛏️ You dug: {found}")
+        else:
+            await self.show(interaction, self.main_panel(uid, headline=head, ores=res.ores, muts=res.mutations))
         await self.celebrate(interaction, res.best, res.mutations)
         sp = self.bot.get_cog("Space")
         if sp:
@@ -943,14 +1049,13 @@ class Game(commands.Cog):
         return [app_commands.Choice(name=engine.layer_label(l).split(" ", 1)[1], value=l.num)
                 for l in LAYERS[:user["max_layer"]] if current.lower() in engine.layer_label(l).lower()][:25]
 
-    @app_commands.command(name="daily", description="Claim your daily coins. Keep a streak going for bigger rewards")
+    @app_commands.command(name="daily", description="Claim today's reward on the 7-day daily calendar")
     async def daily(self, interaction: discord.Interaction):
         uid = interaction.user.id
         self.db.user(uid, interaction.user.display_name)
         ok, msg = engine.claim_daily(self.db, uid)
-        e = discord.Embed(title="📅 Daily Reward", description=msg,
-                          color=discord.Color.green() if ok else discord.Color.dark_grey())
-        await interaction.response.send_message(embed=e, ephemeral=not ok)
+        e, files, v = self.bot.get_cog("Features").calendar_panel(uid, msg if ok else "⏳ " + msg)
+        await interaction.response.send_message(embed=e, files=as_files(files), view=v)
 
     @app_commands.command(name="ore", description="Look up any ore: picture, odds, value and where to find it")
     async def ore(self, interaction: discord.Interaction, name: str):
@@ -1129,8 +1234,8 @@ class Game(commands.Cog):
             "🧬 Any ore can come out **mutated**: ✨ Shiny, ☢️ Radioactive, 🌑 Shadow, 🌈 Holographic, 🌌 Galactic or "
             "🌀 Tweaked, worth x3 up to x150. Regular Sell keeps them.\n"
             "**/travel** · **/index** · **/ore** · **/finds** · **/profile** · **/leaderboard**\n\n"
-            "⌨️ **Chat commands** with `;`: `;mine` `;inv` `;shop` `;mines` `;player` `;bal` `;daily` `;bounties` "
-            "`;snacks` `;ship` `;lb` `;help`"))
+            "⌨️ **Chat commands** with `;`: every slash command works with `;` too, like `;mine` `;inv` `;raid @player` "
+            "`;duel @player 500` `;daily` `;crates` `;enchant` `;arcade` `;weather` `;bal` `;help`"))
 
     # ------------------------------------------------------------ ; chat commands
 
@@ -1160,11 +1265,11 @@ class Game(commands.Cog):
     async def p_shop(self, ctx):
         await self._send_panel(ctx, self.shop_panel(self._me(ctx)))
 
-    @commands.command(name="mines", aliases=["layers", "travel"])
+    @commands.command(name="mines", aliases=["layers", "layer"])
     async def p_mines(self, ctx):
         await self._send_panel(ctx, self.mines_panel(self._me(ctx)))
 
-    @commands.command(name="player", aliases=["p", "profile", "me"])
+    @commands.command(name="player", aliases=["p", "me"])
     async def p_player(self, ctx):
         await self._send_panel(ctx, self.player_panel(self._me(ctx)))
 
@@ -1175,10 +1280,9 @@ class Game(commands.Cog):
 
     @commands.command(name="daily", aliases=["d"])
     async def p_daily(self, ctx):
-        ok, msg = engine.claim_daily(self.db, self._me(ctx))
-        await ctx.reply(embed=discord.Embed(title="📅 Daily Reward", description=msg,
-                                            color=discord.Color.green() if ok else discord.Color.dark_grey()),
-                        mention_author=False)
+        uid = self._me(ctx)
+        ok, msg = engine.claim_daily(self.db, uid)
+        await self._send_panel(ctx, self.bot.get_cog("Features").calendar_panel(uid, msg if ok else "⏳ " + msg))
 
     @commands.command(name="lb", aliases=["leaderboard", "top"])
     async def p_lb(self, ctx):
@@ -1200,8 +1304,96 @@ class Game(commands.Cog):
     async def p_help(self, ctx):
         await ctx.reply(embed=self.help_embed(), mention_author=False)
 
+    # chat versions of the other slash commands: they run the slash command's own code (see CtxInteraction)
+
+    async def _run(self, ctx, cog_name, cmd, *args):
+        cog = self.bot.get_cog(cog_name)
+        self.db.user(ctx.author.id, ctx.author.display_name)
+        it = CtxInteraction(ctx)
+        await getattr(cog, cmd).callback(cog, it, *args)
+
+    @commands.command(name="raid")
+    async def p_raid(self, ctx, member: discord.Member):
+        await self._run(ctx, "Space", "raid_cmd", member)
+
+    @commands.command(name="duel")
+    async def p_duel(self, ctx, member: discord.Member, wager: int = 0):
+        await self._run(ctx, "Space", "duel_cmd", member, max(0, wager))
+
+    @commands.command(name="profile", aliases=["prof"])
+    async def p_profile(self, ctx, member: discord.Member = None):
+        await self._run(ctx, "Game", "profile", member)
+
+    @commands.command(name="achievements", aliases=["ach", "trophies"])
+    async def p_achievements(self, ctx, member: discord.Member = None):
+        await self._run(ctx, "Space", "achievements_cmd", member)
+
+    @commands.command(name="rebirth")
+    async def p_rebirth(self, ctx):
+        await self._run(ctx, "Game", "rebirth")
+
+    @commands.command(name="finds")
+    async def p_finds(self, ctx):
+        await self._run(ctx, "Game", "finds")
+
+    @commands.command(name="weather", aliases=["w"])
+    async def p_weather(self, ctx):
+        await self._run(ctx, "Features", "weather_cmd")
+
+    @commands.command(name="crates", aliases=["crate", "cr"])
+    async def p_crates(self, ctx):
+        await self._run(ctx, "Features", "crates_cmd")
+
+    @commands.command(name="enchant", aliases=["en"])
+    async def p_enchant(self, ctx):
+        await self._run(ctx, "Features", "enchant_cmd")
+
+    @commands.command(name="arcade", aliases=["jack", "bj", "blackjack"])
+    async def p_arcade(self, ctx):
+        await self._run(ctx, "Features", "arcade_cmd")
+
+    @commands.command(name="travel", aliases=["t", "go"])
+    async def p_travel(self, ctx, place: int):
+        await self._run(ctx, "Game", "travel", place)
+
+    @commands.command(name="index", aliases=["idx"])
+    async def p_index(self, ctx, *, planet: str = None):
+        choice = None
+        if planet:
+            key = next((k for k, p in PLANETS.items() if planet.lower() in (k, p.name.lower())), None)
+            if key is None:
+                await ctx.reply("No planet by that name. Try: " + ", ".join(p.name for p in PLANETS.values()), mention_author=False)
+                return
+            choice = types.SimpleNamespace(value=key, name=PLANETS[key].name)
+        await self._run(ctx, "Game", "index", choice)
+
+    @commands.command(name="ore")
+    async def p_ore(self, ctx, *, name: str):
+        await self._run(ctx, "Game", "ore", name)
+
+    @commands.command(name="lock")
+    async def p_lock(self, ctx, *, item: str):
+        uid = self._me(ctx)
+        items = set(self.db.items(uid)) | self.db.locked(uid)
+        key = item if item in items else next((i for i in items if self._known(i) and engine.item_name(i).lower() == item.lower()), item)
+        await self._run(ctx, "Game", "lock", key)
+
+    @commands.command(name="title")
+    async def p_title(self, ctx, *, title: str = "none"):
+        key = "none" if title.lower() in ("none", "off", "clear") else next(
+            (a.key for a in data.ACHIEVEMENTS if title.lower() in (a.key, a.name.lower())), title)
+        await self._run(ctx, "Space", "title_cmd", key)
+
     async def cog_command_error(self, ctx, error):
         if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
+            return
+        if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+            usage = {"raid": ";raid @player", "duel": ";duel @player [bet]", "travel": ";travel <layer number>",
+                     "ore": ";ore <name>", "lock": ";lock <item name>", "title": ";title <achievement name>"}
+            try:
+                await ctx.reply(f"Use it like `{usage.get(ctx.command.name, ';' + ctx.command.name)}`", mention_author=False)
+            except discord.HTTPException:
+                pass
             return
         original = getattr(error, "original", error)
         log.error("; command %s failed for %s (%s)", ctx.command, ctx.author.display_name, ctx.author.id,

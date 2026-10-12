@@ -30,7 +30,20 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 
 Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/leaderboard`, `/help`.
 
-**Chat commands** start with `;` (change it with `COMMAND_PREFIX` in `.env`): `;mine ;inv ;shop ;mines ;player ;bal ;daily ;lb ;bounties ;snacks ;ship ;help`. They need **Message Content Intent** switched on in the Discord developer portal (Bot → Privileged Gateway Intents); without it the bot still starts, just without `;` commands.
+**v0.7.0 (Ultra Super Mega Crack Rock Edition)**
+
+| | |
+|---|---|
+| ✨ Enchanting | Shop → Enchant. 3 slots per pickaxe, one 10k reroll per slot, then locked until an Enchanted Crack Rock (1 in 2,500 per Mine) empties it. Lost when you craft the next pickaxe. Tuning: `ENCHANTS` in `game/data.py`. |
+| 🌦️ Weather | Each planet rolls weather every 3h (`WEATHERS`): luck, mutation, sell and Crack Rock multipliers. `/weather`. |
+| 📦 Crates | Supply / Cosmic / Tweaked (`CRATES`). From minigames, bounties, the calendar, or bought. |
+| 📅 Daily calendar | 7 days (`CALENDAR`), day 7 is a Cosmic Crate, a missed day only knocks you back one step. |
+| 🐌 Slug Den | Prestige 10 sluglings into a better rank (`SLUG_RANKS`), Bigger Backpacks raise the offline cap to 24h. |
+| 🎲 Minigames | 1 in 1,000 per Mine, guaranteed after 250 (`MINIGAME_*`). Always pays; right answers give a Supply Crate. |
+| 🃏 Space Jack | Blackjack vs Tim in the 🎮 Arcade. Unfinished hands are refunded if the bot restarts. |
+| 📜 Bounties | Daily, weekly and monthly boards with page buttons. |
+
+**Chat commands** start with `;` (change it with `COMMAND_PREFIX` in `.env`): `;mine ;inv ;shop ;mines ;player ;bal ;daily ;lb ;bounties ;snacks ;ship ;help`, plus a `;` version of every slash command (`;raid @player`, `;duel @player 500`, `;travel 3`, `;crates`...). They need **Message Content Intent** switched on in the Discord developer portal (Bot → Privileged Gateway Intents); without it the bot still starts, just without `;` commands.
 
 **Owner tools:** `/alcad` (owners only, hidden from everyone without Administrator) shows usage stats across your servers (most-used commands and buttons, most active players and what they use, per server, or one member with `member:`) and the error log with `show: errors`. Owners are `ADMIN_USER_IDS` in `.env` or the bot's owner in the developer portal. `/admin give`, `event`, `meteor`, `tim`, `cops`, `backup` and `restart` are owners-only too, since every server shares one save.
 

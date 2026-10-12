@@ -339,30 +339,55 @@ def today():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
-def seconds_to_reset():
+# Bounty boards: daily (3 jobs), weekly and monthly (bigger jobs, bigger pay, a crate for finishing all 3)
+PERIODS = {
+    "day": ("Daily", 1, 1, None),          # (name, need x, reward x, crate for clearing the board)
+    "week": ("Weekly", 6, 8, "cosmic"),
+    "month": ("Monthly", 20, 40, "tweaked"),
+}
+
+
+def period_key(period, now=None):
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if period == "week":
+        y, w, _ = now.isocalendar()
+        return f"W{y}-{w:02d}"
+    if period == "month":
+        return now.strftime("M%Y-%m")
+    return now.strftime("%Y-%m-%d")
+
+
+def seconds_to_reset(period="day"):
     now = datetime.datetime.now(datetime.timezone.utc)
-    tomorrow = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return (tomorrow - now).total_seconds()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "week":
+        nxt = start + datetime.timedelta(days=7 - now.weekday())
+    elif period == "month":
+        nxt = (start.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+    else:
+        nxt = start + datetime.timedelta(days=1)
+    return (nxt - now).total_seconds()
 
 
 @atomic
-def bounties(db, uid):
-    """Today's 3 bounties for this player, made the first time they look."""
-    day = today()
+def bounties(db, uid, period="day"):
+    """This period's 3 bounties for this player, made the first time they look."""
+    day = period_key(period)
     rows = db.q("SELECT * FROM bounties WHERE user_id=? AND day=? ORDER BY idx", uid, day)
     if rows:
         return rows
+    _, need_x, reward_x, _ = PERIODS[period]
     user = db.user(uid)
     kinds = [k for k in data.BOUNTY_KINDS
              if not (k.key == "collect" and user["sluglings"] == 0)
              and not (k.key == "smelt" and user["layer"] > 5)]
     for idx, kind in enumerate(rng.sample(kinds, data.BOUNTIES_PER_DAY)):
-        need = rng.randint(*kind.need)
+        need = rng.randint(*kind.need) * need_x
         if kind.scale_by == "rolls":
             need *= engine.rolls_for(db, user)
         elif kind.scale_by == "layer":
             need *= scale(user)
-        reward = int(kind.reward * scale(user) * rng.uniform(0.9, 1.3))
+        reward = int(kind.reward * reward_x * scale(user) * rng.uniform(0.9, 1.3))
         db.run("INSERT INTO bounties (user_id, day, idx, kind, need, base, reward) VALUES (?, ?, ?, ?, ?, ?, ?)",
                uid, day, idx, kind.key, need, db.stat(uid, kind.stat), reward)
     return db.q("SELECT * FROM bounties WHERE user_id=? AND day=? ORDER BY idx", uid, day)
@@ -377,24 +402,38 @@ def bounty_text(row):
     return data.BOUNTY_BY_KEY[row["kind"]].text.format(n=f"{row['need']:,}")
 
 
+def bounties_ready(db, uid):
+    """Finished-but-unclaimed bounties across the daily, weekly and monthly boards."""
+    return sum(1 for p in PERIODS for r in bounties(db, uid, p)
+               if not r["claimed"] and bounty_progress(db, r) >= r["need"])
+
+
 @atomic
-def claim_bounty(db, uid, idx):
-    row = db.one("SELECT * FROM bounties WHERE user_id=? AND day=? AND idx=?", uid, today(), idx)
+def claim_bounty(db, uid, idx, period="day"):
+    day = period_key(period)
+    row = db.one("SELECT * FROM bounties WHERE user_id=? AND day=? AND idx=?", uid, day, idx)
     if row is None:
-        return False, "That bounty expired. Check the board for today's jobs."
+        return False, "That bounty expired. Check the board for the current jobs."
     if row["claimed"]:
         return False, "You already cashed that one in."
     if bounty_progress(db, row) < row["need"]:
         return False, "That job isn't finished yet."
-    db.run("UPDATE bounties SET claimed=1 WHERE user_id=? AND day=? AND idx=?", uid, today(), idx)
+    db.run("UPDATE bounties SET claimed=1 WHERE user_id=? AND day=? AND idx=?", uid, day, idx)
     db.add_coins(uid, row["reward"])
     db.bump(uid, "bounties_done")
     msg = f"📜 Bounty done: **{bounty_text(row)}**. +**{row['reward']:,}** coins."
-    left = db.one("SELECT COUNT(*) AS n FROM bounties WHERE user_id=? AND day=? AND claimed=0", uid, today())["n"]
+    left = db.one("SELECT COUNT(*) AS n FROM bounties WHERE user_id=? AND day=? AND claimed=0", uid, day)["n"]
     if left == 0:
-        snack = rng.choice(data.SNACKS)
-        db.add_item(uid, "snack:" + snack.key, 1)
-        msg += f"\n🎁 **All 3 done!** Bonus: a free {snack.emoji} **{snack.name}**."
+        crate = PERIODS[period][3]
+        if crate:
+            c = data.CRATE_BY_KEY[crate]
+            db.add_item(uid, "crate:" + crate, 1)
+            msg += f"\n🎁 **{PERIODS[period][0]} board cleared!** Bonus: a {c.emoji} **{c.name}**."
+        else:
+            snack = rng.choice(data.SNACKS)
+            db.add_item(uid, "snack:" + snack.key, 1)
+            db.add_item(uid, "crate:supply", 1)
+            msg += f"\n🎁 **All 3 done!** Bonus: a free {snack.emoji} **{snack.name}** and a 📦 **Supply Crate**."
     return True, msg
 
 
@@ -430,6 +469,11 @@ def _achieved(key, user, stats, tiers, found):
         "galactic": s("mut_galactic", 0) >= 1,
         "tweaked": s("mut_tweaked", 0) >= 1,
         "mutant": all(s("mut_" + mu.key, 0) >= 1 for mu in data.MUTATIONS),
+        "enchanter": s("enchants_full", 0) >= 1,
+        "crates": s("crates_opened", 0) >= 25,
+        "cardshark": s("jack_wins", 0) >= 25,
+        "slugboss": user["slug_rank"] >= 4,
+        "streak": s("calendar_weeks", 0) >= 1,
     }[key]
 
 
@@ -619,6 +663,7 @@ class AsteroidRun:
     ores: list = field(default_factory=list)      # ores picked up so far
     state: str = "flying"                         # flying, crashed, docked, bailed
     hit_at: tuple = None                          # (row, lane) of the rock that got you
+    hit_how: str = ""                             # "steered" into it, or it "fell" onto you
     seed: int = 0
 
     @property
@@ -668,13 +713,14 @@ def start_asteroid_run(db, uid):
     return run, None
 
 
-def _land(run):
+def _land(run, how):
     """Checks what's in the rocket's cell."""
     row = data.ASTEROID_ROWS - 1
     cell = run.grid[row][run.lane]
     if cell == ROCK:
         run.state = "crashed"
         run.hit_at = (row, run.lane)
+        run.hit_how = how
     elif cell == CHUNK:
         run.ores.append(engine.roll_ore(run.layer, run.luck))
         run.grid[row][run.lane] = None
@@ -685,11 +731,11 @@ def asteroid_step(run, move):
     if run.done:
         return
     run.lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
-    _land(run)                      # steering into a rock beside you counts
+    _land(run, "steered")           # steering into a rock beside you counts
     if run.done:
         return
     run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
-    _land(run)
+    _land(run, "fell")
     run.moves += 1
     if not run.done and run.moves >= data.ASTEROID_MOVES:
         run.state = "docked"

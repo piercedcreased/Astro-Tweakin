@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS locks (
     item TEXT NOT NULL,
     PRIMARY KEY (user_id, item)
 );
+CREATE TABLE IF NOT EXISTS enchants (
+    user_id INTEGER NOT NULL,
+    slot INTEGER NOT NULL,
+    ench TEXT NOT NULL,
+    level INTEGER NOT NULL,
+    rerolled INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, slot)
+);
 CREATE TABLE IF NOT EXISTS usage (
     at REAL NOT NULL,
     guild_id INTEGER,
@@ -146,6 +154,10 @@ MIGRATIONS = [
     ("users", "last_raid", "REAL NOT NULL DEFAULT 0"),            # v0.3.0
     ("users", "best_find", "TEXT"),                               # v0.6.0 rarest find incl. mutations
     ("users", "best_score", "REAL NOT NULL DEFAULT 0"),           # v0.6.0
+    ("users", "cal_day", "INTEGER NOT NULL DEFAULT 0"),           # v0.7.0 daily calendar position (1-7)
+    ("users", "slug_rank", "INTEGER NOT NULL DEFAULT 0"),         # v0.7.0 slugling prestige
+    ("users", "slug_pack", "INTEGER NOT NULL DEFAULT 0"),         # v0.7.0 Bigger Backpacks level
+    ("users", "mg_count", "INTEGER NOT NULL DEFAULT 0"),          # v0.7.0 presses since the last minigame
 ]
 
 

@@ -600,5 +600,121 @@ ACHIEVEMENTS += [
     Achievement("galactic", "Galaxy Brain", "🌌", "Find a Galactic ore"),
     Achievement("tweaked", "Fully Tweaked", "🌀", "Find a Tweaked ore"),
     Achievement("mutant", "Mutant Menagerie", "🧬", "Find every kind of mutation"),
+    Achievement("enchanter", "Enchanter", "✨", "Fill all 3 enchant slots on a pickaxe"),
+    Achievement("crates", "Crate Goblin", "📦", "Open 25 crates"),
+    Achievement("cardshark", "Card Shark", "🃏", "Win 25 hands of Space Jack"),
+    Achievement("slugboss", "Slug Tycoon", "🐌", "Prestige your sluglings to Cosmic Slugs"),
+    Achievement("streak", "Creature of Habit", "📅", "Claim day 7 of the daily calendar"),
 ]
 ACH_BY_KEY = {a.key: a for a in ACHIEVEMENTS}
+
+
+# ================================================================ v0.7.0 features
+
+# ---- Planet weather: every planet rolls new weather every WEATHER_HOURS (same for everyone).
+@dataclass(frozen=True)
+class Weather:
+    key: str
+    name: str
+    emoji: str
+    weight: int
+    luck: float = 1.0
+    mutations: float = 1.0
+    sell: float = 1.0
+    crack: float = 1.0    # Enchanted Crack Rock chance
+    blurb: str = ""
+
+
+WEATHER_HOURS = 3
+WEATHERS = [
+    Weather("clear", "Clear Skies", "🌤️", 34, blurb="Nothing special. Good mining weather."),
+    Weather("flare", "Solar Flare", "☀️", 12, mutations=2.0, blurb="x2 mutation chance"),
+    Weather("dust", "Dust Storm", "🌪️", 12, luck=0.8, sell=1.5, blurb="x0.8 luck, but ore sells for x1.5"),
+    Weather("meteor", "Meteor Season", "☄️", 12, luck=1.5, blurb="x1.5 luck"),
+    Weather("aurora", "Aurora", "🌌", 10, luck=1.25, mutations=1.25, blurb="x1.25 luck and x1.25 mutations"),
+    Weather("goldrush", "Gold Rush", "💰", 8, luck=0.75, sell=2.0, blurb="x0.75 luck, but ore sells for x2"),
+    Weather("crystal", "Crystal Fog", "🔮", 7, crack=3.0, blurb="x3 Enchanted Crack Rock chance"),
+    Weather("tweak", "Tweaker Weather", "🌀", 5, luck=2.0, mutations=2.0, blurb="x2 luck and x2 mutations. Rare!"),
+]
+WEATHER_BY_KEY = {w.key: w for w in WEATHERS}
+
+# ---- Pickaxe enchanting: 3 slots per pickaxe; enchants are lost when you craft the next pickaxe.
+@dataclass(frozen=True)
+class Enchant:
+    key: str
+    name: str
+    emoji: str
+    weight: int
+    levels: tuple         # value at level I, II, III
+    text: str             # "{v}" gets the value
+
+
+ENCHANTS = [
+    Enchant("fortune", "Fortune", "🍀", 30, (1.1, 1.2, 1.35), "x{v} luck"),
+    Enchant("mutagen", "Mutagen", "🧬", 20, (1.25, 1.5, 2.0), "x{v} mutation chance"),
+    Enchant("midas", "Midas", "💰", 20, (1.1, 1.2, 1.35), "x{v} sell value"),
+    Enchant("echo", "Echo", "🔁", 12, (0.05, 0.1, 0.2), "{p} chance a swing digs double"),
+    Enchant("prospector", "Prospector", "💎", 10, (1.5, 2.0, 3.0), "x{v} Enchanted Crack Rock chance"),
+    Enchant("whisperer", "Slug Whisperer", "🐌", 8, (1.15, 1.3, 1.5), "x{v} slugling digging"),
+]
+ENCHANT_BY_KEY = {e.key: e for e in ENCHANTS}
+ENCHANT_LEVEL_WEIGHTS = (60, 30, 10)     # how often you roll level I, II, III
+ENCHANT_SLOTS = 3
+ENCHANT_REROLL_COST = 10_000             # one reroll right after enchanting a slot
+CRACK_ROCK_CHANCE = 2_500                # 1 in N per Mine press
+CRACK_ROCK = "rock:crack"
+
+
+def enchant_cost(pick_price):
+    """Coins to enchant one slot: a tenth of what the pickaxe cost (at least 1,000)."""
+    return max(1_000, pick_price // 10)
+
+
+# ---- Crates
+@dataclass(frozen=True)
+class Crate:
+    key: str
+    name: str
+    emoji: str
+    color: tuple
+    price: int            # x layer scale in the shop, 0 = can't be bought
+    loot: tuple           # (reward kind, weight, amount)
+
+
+CRATES = [
+    Crate("supply", "Supply Crate", "📦", (200, 150, 90), 6_000, (
+        ("coins", 45, 2.0), ("snack", 25, 1), ("roll", 12, 1), ("ores", 15, 15.0), ("crack", 2, 1), ("crate:cosmic", 1, 1))),
+    Crate("cosmic", "Cosmic Crate", "🌌", (120, 110, 255), 50_000, (
+        ("coins", 35, 12.0), ("snack", 20, 3), ("roll", 10, 1), ("ores", 22, 60.0), ("mut", 6, 1), ("crack", 5, 1),
+        ("crate:tweaked", 2, 1))),
+    Crate("tweaked", "Tweaked Crate", "🌀", (255, 80, 200), 0, (
+        ("coins", 30, 80.0), ("ores", 25, 400.0), ("mut", 25, 1), ("crack", 15, 1), ("snack", 5, 5))),
+]
+CRATE_BY_KEY = {c.key: c for c in CRATES}
+
+# ---- Daily calendar: 7 days, then it starts over. Missing a day only knocks you back one step.
+CALENDAR = [
+    ("coins", 1), ("coins", 1.5), ("snack", 1), ("coins", 2.5), ("roll", 1), ("coins", 4), ("crate:cosmic", 1),
+]
+
+# ---- Slugling prestige: trade a full crew for a better kind of slug.
+SLUG_RANKS = [
+    ("Garden Slugs", "🐌", 1.0, 0.5),          # (name, emoji, digging speed, luck)
+    ("Cave Slugs", "🪨", 1.5, 0.75),
+    ("Crystal Slugs", "💎", 2.25, 1.0),
+    ("Magma Slugs", "🔥", 3.5, 1.5),
+    ("Cosmic Slugs", "🌌", 5.0, 2.0),
+    ("Tweaked Slugs", "🌀", 8.0, 3.0),
+]
+SLUG_PRESTIGE_NEED = 10                   # sluglings needed to prestige (you keep 1)
+SLUG_PRESTIGE_COST = 200_000              # x layer scale
+SLUG_PACKS = [12, 16, 20, 24]             # collect cap in hours per Bigger Backpacks level
+SLUG_PACK_COST = 25_000                   # x layer scale x (level + 1)
+
+# ---- Mining minigames: a little pop-up game while mining (also a gentle anti-macro check)
+MINIGAME_CHANCE = 1_000                   # 1 in N per Mine press
+MINIGAME_PITY = 250                       # guaranteed after this many presses without one
+
+# ---- Space Jack (blackjack against Tim)
+JACK_BETS = (1, 5, 25)                    # x JACK_BASE x layer scale
+JACK_BASE = 1_000

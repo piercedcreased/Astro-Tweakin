@@ -1188,3 +1188,150 @@ def depth_banner(layer_num):
     img.save(buf, "JPEG", quality=82)
     _DEPTH[layer_num] = buf.getvalue()
     return _DEPTH[layer_num]
+
+
+# ================================================================ v0.7.0: crates and the daily calendar
+
+def _crate_icon(size, color, emblem="?"):
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    s = size
+    body = [s * .12, s * .32, s * .88, s * .88]
+    d.rounded_rectangle(body, radius=int(s * .06), fill=_dark(color, 0.35), outline=(20, 15, 10), width=max(2, s // 30))
+    d.rounded_rectangle([s * .08, s * .2, s * .92, s * .38], radius=int(s * .05), fill=color, outline=(20, 15, 10), width=max(2, s // 30))
+    for x in (.3, .7):
+        d.rectangle([s * x - s * .04, s * .2, s * x + s * .04, s * .88], fill=_light(color, 0.3))
+    d.text((s / 2, s * .62), emblem, font=font(int(s * .3)), fill=(255, 255, 255), anchor="mm",
+           stroke_width=max(2, s // 40), stroke_fill=(0, 0, 0))
+    return img
+
+
+_LOOT_STYLE = {
+    "coins": ((240, 190, 40), "coin"), "snack": ((255, 150, 60), "snack"), "roll": ((90, 210, 90), "clover"),
+    "ores": ((150, 200, 255), "pick"), "mut": ((255, 120, 220), "dna"), "crack": ((180, 120, 255), "gem"),
+}
+
+
+def _loot_cell(kind, size=96):
+    if kind.startswith("crate:"):
+        from .data import CRATE_BY_KEY
+        c = CRATE_BY_KEY[kind[6:]]
+        cell = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(cell)
+        d.rounded_rectangle([2, 2, size - 3, size - 3], radius=14, fill=_dark(c.color, 0.55), outline=c.color, width=4)
+        ic = _crate_icon(int(size * .7), c.color)
+        cell.paste(ic, (int(size * .15), int(size * .15)), ic)
+        return cell
+    color, icon = _LOOT_STYLE[kind]
+    cell = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(cell)
+    d.rounded_rectangle([2, 2, size - 3, size - 3], radius=14, fill=_dark(color, 0.55), outline=color, width=4)
+    pad = size * 0.2
+    box = (pad, pad, size - pad, size - pad)
+    cx, cy, s = size / 2, size / 2, (size - 2 * pad) / 2
+    if icon == "snack":
+        d.rounded_rectangle([cx - s * .6, cy - s * .7, cx + s * .6, cy + s * .7], radius=8, fill=(255, 170, 70), outline=(120, 60, 10), width=3)
+        d.text((cx, cy), "YUM", font=font(int(s * .45)), fill=(120, 60, 10), anchor="mm")
+    elif icon == "gem":
+        d.polygon([(cx, cy - s * .8), (cx + s * .7, cy - s * .1), (cx, cy + s * .8), (cx - s * .7, cy - s * .1)],
+                  fill=(190, 140, 255), outline=(80, 40, 140))
+        d.line([(cx - s * .3, cy - s * .2), (cx + s * .1, cy + s * .3)], fill=(255, 255, 255), width=3)
+    else:
+        sub = _prize_icon(d, icon, box, color)
+        if sub is not None:
+            cell.paste(sub, (int(cx - sub.width / 2), int(cy - sub.height / 2)), sub)
+    return cell
+
+
+LOOT_NAMES = {"coins": "COINS", "snack": "SNACKS", "roll": "LUCKY ROLL", "ores": "ORE HAUL", "mut": "MUTATED ORE",
+              "crack": "CRACK ROCK"}
+
+
+def crate_gif(crate, result_kind):
+    """CS-case style reel for opening a crate, landing on what you got."""
+    W, H, C, GAP = 480, 170, 96, 8
+    step = C + GAP
+    r = random.Random()
+    kinds = [l[0] for l in crate.loot]
+    strip = r.choices(kinds, weights=[l[1] for l in crate.loot], k=34)
+    land = 30
+    strip[land] = result_kind
+    cells = {k: _loot_cell(k, C) for k in set(strip)}
+    target = land * step + C / 2 - W / 2 + r.uniform(-C * 0.35, C * 0.35)
+    final = land * step + C / 2 - W / 2
+    N = 44
+    frames, durs = [], []
+    for f in range(N + 1):
+        t = f / N
+        off = target * (1 - (1 - t) ** 3) if f < N else final
+        img = Image.new("RGB", (W, H), _dark(crate.color, 0.85))
+        d = ImageDraw.Draw(img)
+        first = int(off // step)
+        for i in range(max(0, first), min(len(strip), first + W // step + 2)):
+            c = cells[strip[i]]
+            img.paste(c, (int(i * step - off), (H - C) // 2 - 10), c)
+        if f == N:
+            d.rounded_rectangle([W / 2 - C / 2 - 6, (H - C) / 2 - 16, W / 2 + C / 2 + 6, (H + C) / 2 - 4],
+                                radius=16, outline=(255, 255, 255), width=4)
+        d.polygon([(W / 2 - 10, 0), (W / 2 + 10, 0), (W / 2, 16)], fill=(255, 215, 60))
+        d.polygon([(W / 2 - 10, H - 22), (W / 2 + 10, H - 22), (W / 2, H - 38)], fill=(255, 215, 60))
+        if f == N:
+            label = LOOT_NAMES.get(result_kind) or "BONUS CRATE!"
+            _outlined(d, (W / 2, H - 11), label, 18, _light(crate.color, 0.3), stroke=3)
+        else:
+            _outlined(d, (W / 2, H - 11), crate.name.upper() + "...", 18, (255, 255, 255), stroke=3)
+        frames.append(img)
+        durs.append(60 if f < N else 3000)
+    buf = io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=durs, optimize=True)
+    return buf.getvalue()
+
+
+def crate_card(crates_owned):
+    """Picture for the crates menu: each kind of crate and how many you have."""
+    from .data import CRATES
+    W, H = 480, 150
+    img = _space_bg(W, H, "crates", stars=40).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    for i, c in enumerate(CRATES):
+        x = 20 + i * 155
+        ic = _crate_icon(100, c.color)
+        img.alpha_composite(ic, (x + 15, 8))
+        _outlined(d, (x + 65, 120), c.name.upper(), _fit(c.name.upper(), 145, 17), _light(c.color, 0.3), stroke=2)
+        _outlined(d, (x + 110, 30), f"x{crates_owned.get(c.key, 0)}", 22, (255, 255, 255), stroke=3)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+def calendar_card(today, done_upto, ready, rewards):
+    """The 7-day daily calendar. today = the day you can claim (or claimed last), done_upto = days already
+    claimed this week, rewards = [label] for days 1-7."""
+    W, H = 560, 150
+    img = _space_bg(W, H, "calendar", stars=40)
+    d = ImageDraw.Draw(img)
+    _outlined(d, (W / 2, 18), "DAILY CALENDAR", 20, (255, 215, 60), stroke=3)
+    cw = (W - 30) / 7
+    for i in range(7):
+        x0, y0 = 15 + i * cw + 3, 38
+        x1, y1 = x0 + cw - 6, H - 10
+        day = i + 1
+        done = day <= done_upto
+        now = day == today and ready
+        fill = (40, 90, 50) if done else (90, 70, 20) if now else (35, 32, 50)
+        outline = (110, 230, 130) if done else (255, 215, 60) if now else (90, 85, 120)
+        if day == 7:
+            outline = outline if done or now else (200, 120, 255)
+        d.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=fill, outline=outline, width=3)
+        _outlined(d, ((x0 + x1) / 2, y0 + 16), f"DAY {day}", 15, (255, 255, 255), stroke=2)
+        if day == 7:
+            ic = _crate_icon(46, (120, 110, 255))
+            img.paste(ic, (int((x0 + x1) / 2 - 23), int(y0 + 30)), ic)
+        lab = rewards[i]
+        _outlined(d, ((x0 + x1) / 2, y1 - 16), lab, _fit(lab, cw - 12, 14), (230, 230, 240), stroke=2)
+        if done:
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2 + 4
+            d.line([(cx - 14, cy), (cx - 4, cy + 10), (cx + 16, cy - 12)], fill=(120, 255, 140), width=6)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    return buf.getvalue()

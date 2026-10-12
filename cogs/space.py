@@ -91,11 +91,13 @@ class Space(commands.Cog):
         elif action.startswith("snackeat_"):
             ok, msg = space.eat_snack(self.db, uid, action[9:])
             await self.show(interaction, self.snack_panel(uid, msg if ok else "❌ " + msg))
-        elif action == "bounties":
-            await self.show(interaction, self.bounty_panel(uid))
-        elif action.startswith("bounty_"):
-            ok, msg = space.claim_bounty(self.db, uid, int(action[7:]))
-            await self.show(interaction, self.bounty_panel(uid, msg if ok else "❌ " + msg))
+        elif action in ("bounties", "bountiesw", "bountiesm"):
+            await self.show(interaction, self.bounty_panel(uid, period=self.PAGE_PERIOD[action[-1]]))
+        elif action.startswith(("bounty_", "bountyw_", "bountym_")):
+            tag, idx = action.split("_", 1)
+            period = self.PAGE_PERIOD[tag[-1]]
+            ok, msg = space.claim_bounty(self.db, uid, int(idx), period)
+            await self.show(interaction, self.bounty_panel(uid, msg if ok else "❌ " + msg, period))
         elif action == "trophies":
             await self.show(interaction, self.trophy_panel(uid, buttons=True))
         elif action.startswith("duelyes_"):
@@ -211,9 +213,12 @@ class Space(commands.Cog):
             v.add_item(B("ar_start", uid, "Again", "☄️", discord.ButtonStyle.primary))
             v.add_item(B("back", uid, "Back to mine", "↩️"))
         else:
-            v.add_item(B("ar_l", uid, None, "⬅️", discord.ButtonStyle.primary, disabled=run.lane == 0))
-            v.add_item(B("ar_s", uid, None, "⬆️", discord.ButtonStyle.primary))
-            v.add_item(B("ar_r", uid, None, "➡️", discord.ButtonStyle.primary, disabled=run.lane == data.ASTEROID_LANES - 1))
+            # the move number is in each button, so a press made on an older picture (while the last press was
+            # still loading) is ignored instead of steering from a position you couldn't see
+            m = run.moves
+            v.add_item(B(f"ar_l_{m}", uid, None, "⬅️", discord.ButtonStyle.primary, disabled=run.lane == 0))
+            v.add_item(B(f"ar_s_{m}", uid, None, "⬆️", discord.ButtonStyle.primary))
+            v.add_item(B(f"ar_r_{m}", uid, None, "➡️", discord.ButtonStyle.primary, disabled=run.lane == data.ASTEROID_LANES - 1))
             v.add_item(B("ar_bail", uid, "Bail out", "🏳️", discord.ButtonStyle.secondary))
         return e, files, v
 
@@ -239,7 +244,11 @@ class Space(commands.Cog):
         if what == "bail":
             space.finish_asteroid_run(self.db, run, bail=True)
         else:
-            space.asteroid_step(run, {"l": -1, "s": 0, "r": 1}[what])
+            step, _, at = what.partition("_")
+            if at and at.isdigit() and int(at) != run.moves:
+                await self.game.ack(interaction)     # stale press from an older picture
+                return
+            space.asteroid_step(run, {"l": -1, "s": 0, "r": 1}[step])
         if not run.done:
             await self.show(interaction, self.asteroid_panel(uid, run))
             return
@@ -253,7 +262,9 @@ class Space(commands.Cog):
         if run.state == "docked":
             note = f"🏁 **Docked at Tim's station!** +**{coins:,}** coins and your ore:\n{haul}"
         elif run.state == "crashed":
-            note = (f"💥 **Crashed after {run.moves} moves!** You grabbed {len(before)} chunk(s) and kept "
+            how = ("You steered into a rock." if run.hit_how == "steered" else
+                   "A rock fell straight down onto you (it was right above your rocket).")
+            note = (f"💥 **Crashed after {run.moves} moves!** {how} You grabbed {len(before)} chunk(s) and kept "
                     f"{len(kept)}:\n{haul}")
         else:
             note = f"🏳️ **Bailed out after {run.moves} moves.** You kept your ore:\n{haul}"
@@ -280,11 +291,18 @@ class Space(commands.Cog):
         v.add_item(B("inv", uid, "Back", "↩️", row=2))
         return e, [], v
 
-    def bounty_panel(self, uid, note=None):
-        rows = space.bounties(self.db, uid)
-        e = discord.Embed(title="📜 Bounty Board", color=discord.Color.from_rgb(200, 150, 80),
-                          description=(note + "\n\n" if note else "") + "Three jobs a day. Finish all three for a bonus snack.")
+    PAGE_PERIOD = {"s": "day", "y": "day", "w": "week", "m": "month"}   # last letter of the action
+    PERIOD_TAG = {"day": "", "week": "w", "month": "m"}
+
+    def bounty_panel(self, uid, note=None, period="day"):
+        name, _, _, crate = space.PERIODS[period]
+        rows = space.bounties(self.db, uid, period)
+        bonus = (f"a {data.CRATE_BY_KEY[crate].emoji} {data.CRATE_BY_KEY[crate].name}" if crate
+                 else "a bonus snack and a 📦 Supply Crate")
+        e = discord.Embed(title=f"📜 Bounty Board · {name}", color=discord.Color.from_rgb(200, 150, 80),
+                          description=(note + "\n\n" if note else "") + f"Three jobs. Finish all three for {bonus}.")
         v = discord.ui.View(timeout=None)
+        tag = self.PERIOD_TAG[period]
         for r in rows:
             prog = space.bounty_progress(self.db, r)
             done = prog >= r["need"]
@@ -292,10 +310,18 @@ class Space(commands.Cog):
             e.add_field(name=f"{mark} {space.bounty_text(r)}",
                         value=f"{engine.bar(prog / r['need'])} {prog:,}/{r['need']:,}  ·  💰 {r['reward']:,} coins"
                               + ("  ·  *claimed*" if r["claimed"] else ""), inline=False)
-            v.add_item(B(f"bounty_{r['idx']}", uid, f"Claim #{r['idx'] + 1}", "💰", discord.ButtonStyle.success,
+            v.add_item(B(f"bounty{tag}_{r['idx']}", uid, f"Claim #{r['idx'] + 1}", "💰", discord.ButtonStyle.success,
                          disabled=r["claimed"] or not done))
-        e.set_footer(text=f"New jobs in {fmt_time(space.seconds_to_reset())} (midnight UTC)")
-        v.add_item(B("player", uid, "Back", "↩️"))
+        reset = {"day": "midnight UTC", "week": "Monday, midnight UTC", "month": "the 1st, midnight UTC"}[period]
+        e.set_footer(text=f"New jobs in {fmt_time(space.seconds_to_reset(period))} ({reset})")
+        for p, (pname, _, _, _) in space.PERIODS.items():
+            ready = sum(1 for r in space.bounties(self.db, uid, p)
+                        if not r["claimed"] and space.bounty_progress(self.db, r) >= r["need"])
+            label = pname + (f" ({ready}!)" if ready else "")
+            v.add_item(B("bounties" + self.PERIOD_TAG[p], uid, label, "📅" if p == "day" else "🗓️" if p == "week" else "📆",
+                         discord.ButtonStyle.primary if p == period else discord.ButtonStyle.secondary,
+                         disabled=p == period, row=1))
+        v.add_item(B("player", uid, "Back", "↩️", row=1))
         return e, [], v
 
     def trophy_panel(self, uid, buttons=False):
@@ -505,7 +531,7 @@ class Space(commands.Cog):
         self.db.user(interaction.user.id, interaction.user.display_name)
         await self._open(interaction, self.snack_panel(interaction.user.id))
 
-    @app_commands.command(name="bounties", description="Today's three bounty jobs")
+    @app_commands.command(name="bounties", description="Your daily, weekly and monthly bounty jobs")
     async def bounties_cmd(self, interaction: discord.Interaction):
         self.db.user(interaction.user.id, interaction.user.display_name)
         await self._open(interaction, self.bounty_panel(interaction.user.id))

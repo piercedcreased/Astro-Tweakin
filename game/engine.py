@@ -69,6 +69,52 @@ def roll_ore(layer, luck, rand=None):
     return pool[-1]
 
 
+# ---------------------------------------------------------------- v0.7.0 weather and enchants
+
+def weather_window(t=None):
+    return int((t or time.time()) // (data.WEATHER_HOURS * 3600))
+
+
+def weather_for(planet, t=None):
+    """This planet's weather right now. The same for everyone: it's seeded by the planet and the time window."""
+    r = random.Random(f"{planet}:{weather_window(t)}")
+    return r.choices(data.WEATHERS, weights=[w.weight for w in data.WEATHERS])[0]
+
+
+def weather_ends(t=None):
+    return (weather_window(t) + 1) * data.WEATHER_HOURS * 3600
+
+
+def user_weather(user):
+    return weather_for(LAYERS[user["layer"] - 1].planet)
+
+
+def enchants(db, uid):
+    """{slot: row} of the enchants on your current pickaxe."""
+    return {r["slot"]: r for r in db.q("SELECT * FROM enchants WHERE user_id=? ORDER BY slot", uid)}
+
+
+def enchant_value(ench_key, level):
+    return data.ENCHANT_BY_KEY[ench_key].levels[level - 1]
+
+
+def enchant_bonus(db, uid, kind):
+    """Combined effect of one enchant kind across your slots (multipliers multiply, Echo chances add)."""
+    rows = [r for r in enchants(db, uid).values() if r["ench"] == kind]
+    if kind == "echo":
+        return sum(enchant_value(kind, r["level"]) for r in rows)
+    out = 1.0
+    for r in rows:
+        out *= enchant_value(kind, r["level"])
+    return out
+
+
+def enchant_text(ench_key, level):
+    e = data.ENCHANT_BY_KEY[ench_key]
+    v = enchant_value(ench_key, level)
+    return f"{e.emoji} **{e.name} {'I' * level if level < 4 else level}**: " + e.text.format(v=f"{v:g}", p=f"{int(v * 100)}%")
+
+
 @dataclass
 class Luck:
     total: float
@@ -89,6 +135,12 @@ def luck_for(db, user, base=1.0):
     ev = db.event()
     if ev:
         parts.append((ev["label"] or "Server Event", ev["luck"]))
+    w = weather_for(layer.planet)
+    if w.luck != 1.0:
+        parts.append((w.name, w.luck))
+    fortune = enchant_bonus(db, user["id"], "fortune")
+    if fortune != 1.0:
+        parts.append(("Fortune enchant", fortune))
     total = 1.0
     for _, m in parts:
         total *= m
@@ -116,12 +168,14 @@ def sell_mult(user, db=None):
         midas = db.buffs(user["id"]).get("sell")
         if midas:
             m *= midas[0]
+        m *= user_weather(user).sell * enchant_bonus(db, user["id"], "midas")
     return m
 
 
 def mutation_mult(db, uid):
     b = db.buffs(uid).get("mutluck")
-    return b[0] if b else 1.0
+    m = b[0] if b else 1.0
+    return m * user_weather(db.user(uid)).mutations * enchant_bonus(db, uid, "mutagen")
 
 
 def find_score(ore, mut=None):
@@ -145,6 +199,9 @@ class SwingResult:
     luck: Luck
     autosold: int = 0     # coins from auto-sell
     mutations: list = field(default_factory=list)   # [(ore, mutation)]
+    echoed: bool = False  # the Echo enchant doubled this swing
+    crack: bool = False   # found an Enchanted Crack Rock
+    minigame: bool = False  # time for a mining minigame
 
 
 def roll_mutation(mult=1.0, rand=None):
@@ -212,16 +269,33 @@ def record_finds(db, uid, ores, mutations=None, rand=None):
     return best
 
 
+def crack_chance(db, user):
+    """1 in N chance per Mine press of an Enchanted Crack Rock."""
+    return data.CRACK_ROCK_CHANCE / (user_weather(user).crack * enchant_bonus(db, user["id"], "prospector"))
+
+
 @atomic
 def swing(db, uid):
     user = db.user(uid)
     luck = luck_for(db, user)
-    ores = [roll_ore(user["layer"], luck.total) for _ in range(rolls_for(db, user))]
+    n = rolls_for(db, user)
+    echoed = rng.random() < enchant_bonus(db, uid, "echo")
+    if echoed:
+        n *= 2
+    ores = [roll_ore(user["layer"], luck.total) for _ in range(n)]
     muts = []
     best = record_finds(db, uid, ores, muts)
     db.bump(uid, "mined", len(ores))
+    db.bump(uid, "swings")
     coins = autosell(db, uid)
-    return SwingResult(ores, best, luck, coins, muts)
+    crack = rng.random() * crack_chance(db, user) < 1
+    if crack:
+        db.add_item(uid, data.CRACK_ROCK, 1)
+        db.bump(uid, "crack_rocks")
+    count = user["mg_count"] + 1
+    game = count >= data.MINIGAME_PITY or rng.random() * data.MINIGAME_CHANCE < 1
+    db.set(uid, mg_count=0 if game else count)
+    return SwingResult(ores, best, luck, coins, muts, echoed, crack, game)
 
 
 def autosell(db, uid):
@@ -287,25 +361,54 @@ def bar(frac, width=10):
     return "▰" * full + "▱" * (width - full)
 
 
+def calendar_state(user, now=None):
+    """(next calendar day 1-7, seconds until it can be claimed, missed a day?)"""
+    now = now or time.time()
+    since = now - user["daily_last"]
+    last = user["cal_day"]
+    missed = bool(user["daily_last"]) and since > data.DAILY_GRACE
+    if not user["daily_last"]:
+        nxt = 1
+    elif missed:
+        nxt = max(1, last)            # missing a day only knocks you back one step (you redo that day)
+    else:
+        nxt = last % 7 + 1
+    return nxt, max(0, data.DAILY_COOLDOWN - since), missed
+
+
 @atomic
 def claim_daily(db, uid):
+    """The 7-day calendar. Returns (ok, message)."""
     user = db.user(uid)
     now = time.time()
-    since = now - user["daily_last"]
-    if since < data.DAILY_COOLDOWN:
-        return False, f"Your next daily is ready in {fmt_time(data.DAILY_COOLDOWN - since)}."
-    streak = user["daily_streak"] + 1 if since <= data.DAILY_GRACE else 1
-    mult = 1 + min(streak - 1, 10) * 0.1
-    coins = int(500 * (3 ** (user["max_layer"] - 1)) * mult)
-    db.add_coins(uid, coins)
-    db.set(uid, daily_last=now, daily_streak=streak)
-    msg = f"📅 Day **{streak}** streak! You got **{coins:,} coins** (x{mult:.1f} streak bonus)."
-    if streak % 7 == 0:
+    day, wait, missed = calendar_state(user, now)
+    if wait > 0:
+        return False, f"Your next daily (day {day}) is ready in {fmt_time(wait)}."
+    kind, amount = data.CALENDAR[day - 1]
+    base = int(500 * data.scale(user["max_layer"]))
+    if kind == "coins":
+        coins = int(base * amount)
+        db.add_coins(uid, coins)
+        got = f"**{coins:,} coins**"
+    elif kind == "snack":
+        snack = rng.choice(data.SNACKS)
+        db.add_item(uid, "snack:" + snack.key, int(amount))
+        got = f"a {snack.emoji} **{snack.name}**"
+    elif kind == "roll":
         db.set(uid, last_roll=0)
-        db.add_buff(uid, "luck", 2, 30 * 60)
-        msg += "\n🎁 **Weekly bonus:** your Lucky Roll is recharged and you have **x2 luck for 30 minutes**!"
-    elif since > data.DAILY_GRACE and user["daily_streak"]:
-        msg += f"\n(Your old {user['daily_streak']}-day streak ran out. Come back within 48h to keep it going.)"
+        got = "a **Lucky Roll recharge** (it's ready now)"
+    else:
+        db.add_item(uid, kind, int(amount))
+        c = data.CRATE_BY_KEY[kind.split(":", 1)[1]]
+        got = f"a {c.emoji} **{c.name}**"
+        db.bump(uid, "calendar_weeks")
+    streak = user["daily_streak"] + 1 if not missed else 1
+    db.set(uid, daily_last=now, daily_streak=streak, cal_day=day)
+    msg = f"📅 **Day {day} of 7:** you got {got}!"
+    if missed:
+        msg += "\n(You missed a day, so you're redoing this day. Come back within 48h to keep moving.)"
+    elif day == 7:
+        msg += "\n🎉 You finished the week! The calendar starts over tomorrow."
     return True, msg
 
 
@@ -480,6 +583,12 @@ def item_name(item):
     if kind == "mut":
         m, ore = split_mut(key)
         return f"{m.name} {ore.name}"
+    if kind == "crate":
+        return data.CRATE_BY_KEY[key].name
+    if kind == "rock":
+        if key != "crack":
+            raise KeyError(key)
+        return "Enchanted Crack Rock"
     return data.BARS[key][0]
 
 
@@ -524,6 +633,7 @@ def buy_pickaxe(db, uid):
         return False, f"You need {', '.join(missing)} for the **{nxt.name}**."
     pay(db, uid, nxt.price, nxt.materials)
     db.set(uid, pickaxe=nxt.key)
+    db.run("DELETE FROM enchants WHERE user_id=?", uid)      # enchants don't carry over to the next pickaxe
     return True, f"You crafted the **{nxt.name}**! Luck x{nxt.luck}, {nxt.cooldown}s cooldown, {nxt.rolls} ore per swing."
 
 
@@ -618,6 +728,16 @@ def smelt_all(db, uid, only=None, limit=None):
     return made, fee
 
 
+def collect_cap(user):
+    return data.SLUG_PACKS[min(user["slug_pack"], len(data.SLUG_PACKS) - 1)]
+
+
+def slug_output(db, user, elapsed):
+    """Ores the crew digs in `elapsed` seconds: 1 a minute each, x their rank's speed and the Whisperer enchant."""
+    per = data.SLUG_RANKS[user["slug_rank"]][2] * enchant_bonus(db, user["id"], "whisperer")
+    return int(elapsed // data.SLUGLING_SECONDS_PER_ROLL * user["sluglings"] * per)
+
+
 def slugling_cost(owned):
     return int(data.SLUGLING_BASE_COST * data.SLUGLING_COST_GROWTH ** owned)
 
@@ -638,13 +758,13 @@ def hire_slugling(db, uid):
 def collect_sluglings(db, uid):
     user = db.user(uid)
     now = time.time()
-    elapsed = min(now - user["last_collect"], data.COLLECT_CAP_HOURS * 3600)
+    elapsed = min(now - user["last_collect"], collect_cap(user) * 3600)
     db.set(uid, last_collect=now)
     if user["sluglings"] <= 0 or elapsed < data.SLUGLING_SECONDS_PER_ROLL:
         return [], elapsed, []
-    n = int(elapsed // data.SLUGLING_SECONDS_PER_ROLL) * user["sluglings"]
-    n = min(n, 50_000)
-    luck = luck_for(db, user, base=data.SLUGLING_LUCK).total
+    n = slug_output(db, user, elapsed)
+    n = min(n, 100_000)
+    luck = luck_for(db, user, base=data.SLUG_RANKS[user["slug_rank"]][3]).total
     ores = [roll_ore(user["layer"], luck, fast_rng) for _ in range(n)]
     muts = []
     record_finds(db, uid, ores, muts, fast_rng if n > 100 else None)
@@ -690,6 +810,7 @@ def rebirth(db, uid):
     for k, v in keep.items():
         db.add_item(uid, k, v)
     db.run("DELETE FROM buffs WHERE user_id=?", uid)
+    db.run("DELETE FROM enchants WHERE user_id=?", uid)
     db.set(uid, coins=0, pickaxe="wood", layer=1, max_layer=1, sluglings=0,
            rebirths=user["rebirths"] + 1, last_collect=time.time())
     n = user["rebirths"] + 1
@@ -712,4 +833,6 @@ def fmt_time(sec):
         return f"{sec}s"
     if sec < 3600:
         return f"{sec // 60}m {sec % 60}s"
-    return f"{sec // 3600}h {(sec % 3600) // 60}m"
+    if sec < 86400:
+        return f"{sec // 3600}h {(sec % 3600) // 60}m"
+    return f"{sec // 86400}d {(sec % 86400) // 3600}h"
