@@ -238,8 +238,6 @@ class Game(commands.Cog):
         if ench:
             lines.append("✨ " + "  ·  ".join(engine.enchant_text(r["ench"], r["level"]).replace("**", "").split(":")[0]
                                              for r in ench.values()))
-        for label, frac in engine.goals(self.db, uid):
-            lines.append(f"🎯 {label}  {engine.bar(frac)} {int(frac * 100)}%")
         if user["sluglings"]:
             waiting = min(time.time() - user["last_collect"], engine.collect_cap(user) * 3600)
             n = engine.slug_output(self.db, user, waiting)
