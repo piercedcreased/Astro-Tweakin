@@ -311,6 +311,9 @@ def jack_deal(db, uid, bet):
     h = JackHand(uid, bet, [draw(), draw()], [draw(), draw()])
     if hand_total(h.player) == 21:
         _settle(db, h, "blackjack" if hand_total(h.dealer) != 21 else "push")
+    elif hand_total(h.dealer) == 21:
+        # Tim peeks like a real dealer: his blackjack ends the hand right away, before you can double into it
+        _settle(db, h, "lost")
     return h, None
 
 

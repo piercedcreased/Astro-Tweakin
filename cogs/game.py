@@ -1089,6 +1089,11 @@ class Game(commands.Cog):
         e.add_field(name="Sells for", value=f"{o.value:,} coins")
         e.add_field(name="You've found", value=f"{found.get(o.key, 0):,}")
         e.add_field(name="Found in", value=where[:1024], inline=False)
+        if o.tier in data.DEPTH_EASE_TIERS and len(o.layers) > 1:
+            here = self.db.user(interaction.user.id)["layer"]
+            e.add_field(name="Gets easier deeper", inline=False, value="  ·  ".join(
+                f"{'**' if n == here else ''}L{n}: {fmt_chance(engine.layer_chance(o, n))}{'**' if n == here else ''}"
+                for n in o.layers)[:1024])
         files = []
         if seen:
             files.append(ore_file(o))

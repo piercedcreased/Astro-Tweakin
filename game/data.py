@@ -722,6 +722,10 @@ JACK_BASE = 1_000                         # x layer scale = the bet suggested in
 JACK_MIN_BET = 100                        # you can bet any amount from this up to all your coins
 
 
+# ---- Depth: an ore that drops on several layers gets easier to find on each layer below its first one
+DEPTH_EASE = 1.6                              # 1 in 100 -> 1 in 62 one layer down -> 1 in 39 -> 1 in 24 ...
+DEPTH_EASE_TIERS = ("uncommon", "rare", "epic")   # Legendary and up stay as rare as they say
+
 # ---- v0.8.0 multiplayer
 # Tags: special items you use from the Inventory (🏷️ Tags) or trade on the Market.
 @dataclass(frozen=True)

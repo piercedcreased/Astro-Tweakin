@@ -28,7 +28,18 @@ def ores_for_layer(layer):
     return sorted(pool, key=lambda o: o.chance, reverse=True)
 
 
+def layer_chance(ore, layer):
+    """1 in N for this ore on this layer: Uncommon to Epic ores get easier the deeper below their first layer you are."""
+    first = min(ore.layers)
+    if ore.tier in data.DEPTH_EASE_TIERS and layer > first:
+        return max(2.0, ore.chance / data.DEPTH_EASE ** (layer - first))
+    return ore.chance
+
+
 _POOLS = {l.num: ores_for_layer(l.num) for l in LAYERS}
+# what roll_ore actually walks: (ore, 1-in-N on that layer, luck applies?), rarest first, the base ore last
+_ROLLS = {n: sorted([(o, layer_chance(o, n), o.chance >= 50) for o in pool[:-1]], key=lambda t: -t[1]) + [(pool[-1], 1, False)]
+          for n, pool in _POOLS.items()}
 
 
 def _true_odds():
@@ -59,14 +70,13 @@ def roll_ore(layer, luck, rand=None):
     Each ore hits with chance luck / N, so a "1 in 10,000,000" ore really is
     1 in 10M at 1x luck and 1 in 1M at 10x luck.
     """
-    pool = _POOLS[layer]
+    pool = _ROLLS[layer]
     rand = (rand or rng).random
-    for ore in pool[:-1]:
+    for ore, chance, lucky in pool[:-1]:
         # luck only boosts uncommon-and-up, so commons keep their normal mix
-        boost = luck if ore.chance >= 50 else 1.0
-        if rand() * ore.chance < boost:
+        if rand() * chance < (luck if lucky else 1.0):
             return ore
-    return pool[-1]
+    return pool[-1][0]
 
 
 # ---------------------------------------------------------------- v0.7.0 weather and enchants
