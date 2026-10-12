@@ -86,16 +86,17 @@ def ore_line(ore, n=None, layer=None):
     return f"{TIER_EMOJI[ore.tier]} **{ore.name}**{count}  ·  {odds}"
 
 
-def shout_line(name, ore):
+def shout_line(name, ore, odds=None):
     tier = ore.tier_info
+    chance = fmt_chance(odds) if odds else fmt_chance(ore)
     if ore.tier == "contraband":
         return (f"🚨🚔 **{name.upper()} HAS DUG UP CONTRABAND: {ore.name.upper()}!** "
-                f"({fmt_chance(ore)}) Nobody tell the space cops.")
+                f"({chance}) Nobody tell the space cops.")
     prefix = "ULTRA RARE " if tier.effect >= 3 else ""
     word = f"{prefix}{tier.name.upper()}"
     article = "AN" if word[0] in "AEIOU" else "A"
     ore_name = ore.name[4:] if ore.name.startswith("The ") else ore.name
-    return f"🚨 **{name.upper()} HAS DUG UP {article} {word} {ore_name.upper()}!** ({fmt_chance(ore)})"
+    return f"🚨 **{name.upper()} HAS DUG UP {article} {word} {ore_name.upper()}!** ({chance})"
 
 
 class PanelButton(discord.ui.DynamicItem[discord.ui.Button], template=r"cs:(?P<action>[a-z0-9_]+):(?P<uid>\d+)"):
@@ -777,14 +778,17 @@ class Game(commands.Cog):
     async def _post_reveal(self, interaction, ore, mut=None):
         tier = ore.tier_info
         name = interaction.user.display_name
-        gif = await asyncio.to_thread(images.reveal_gif, ore, name, None, mut, interaction.user.name)
+        # the odds where it was found: Uncommon to Epic ores get easier deeper, so show this layer's number
+        layer = self.db.user(interaction.user.id)["layer"]
+        odds = engine.layer_chance(ore, layer) if layer in ore.layers and ore.tier in data.DEPTH_EASE_TIERS else None
+        gif = await asyncio.to_thread(images.reveal_gif, ore, name, None, mut, interaction.user.name, odds)
         if mut:
             text = (f"{mut.emoji} **{name}** found a **{mut.name.upper()} {ore.name.upper()}**! "
                     f"(1 in {mut.chance:,} mutation, worth x{mut.mult})")
             announce = mut.announce
             fname = f"{mut.key}_{ore.key}.gif"
         else:
-            text = shout_line(name, ore)
+            text = shout_line(name, ore, odds)
             announce = tier.announce
             fname = f"{ore.key}.gif"
         await interaction.followup.send(text, file=discord.File(io.BytesIO(gif), filename=fname))

@@ -333,23 +333,24 @@ def safe_name(name, fallback="SOMEONE"):
     return fb if sum(ch.isalnum() for ch in fb) >= 2 else "SOMEONE"
 
 
-def reveal_gif(ore, user_name, frames=None, mut=None, fallback=None):
+def reveal_gif(ore, user_name, frames=None, mut=None, fallback=None, odds=None):
     """Big special-effect GIF: '<USER> DUG UP A <TIER> <ORE>'. Loops seamlessly. Cached in memory.
     mut = a Mutation: shows the mutated ore with that mutation's colours and title instead.
-    fallback = a plain name to use if user_name can't be drawn (their account username)."""
+    fallback = a plain name to use if user_name can't be drawn (their account username).
+    odds = the "1 in N" this ore had where it was found (Uncommon to Epic ores get easier deeper)."""
     user_name = safe_name(user_name, fallback)
-    key = (ore.key, user_name, frames, mut.key if mut else None)
+    key = (ore.key, user_name, frames, mut.key if mut else None, odds)
     if key in _REVEALS:
         _REVEALS[key] = _REVEALS.pop(key)          # mark as recently used
         return _REVEALS[key]
-    gif = _render_reveal(ore, user_name, frames, mut)
+    gif = _render_reveal(ore, user_name, frames, mut, odds)
     _REVEALS[key] = gif
     while len(_REVEALS) > 40:
         _REVEALS.pop(next(iter(_REVEALS)))
     return gif
 
 
-def _render_reveal(ore, user_name, frames=None, mut=None):
+def _render_reveal(ore, user_name, frames=None, mut=None, odds=None):
     tier = ore.tier_info
     effect = tier.effect
     if mut:
@@ -381,7 +382,7 @@ def _render_reveal(ore, user_name, frames=None, mut=None):
         title = "!! CONTRABAND !!"
     who = f"{user_name.upper()} DUG UP"
     name = ore.name.upper()
-    chance = f"1 in {ore.chance:,}"
+    chance = f"1 in {int(round(odds or ore.chance)):,}"
     if mut:
         title = f"{mut.name.upper()} MUTATION!" + ("!" if mut.announce else "")
         name = f"{mut.name} {ore.name}".upper()
