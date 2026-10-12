@@ -395,6 +395,10 @@ class Game(commands.Cog):
         nxt = engine.next_pickaxe(user)
         if nxt:
             mats = ", ".join(f"{q}x {engine.item_name(i)} (have {self.db.qty(uid, i)})" for i, q in nxt.materials.items())
+            for i in nxt.materials:
+                if i.startswith("bar:"):
+                    b = data.BARS[i[4:]]
+                    mats += f"\n{b.emoji} 1 {b.name} = " + " + ".join(f"{q} {ORE_BY_KEY[o].name}" for o, q in b.recipe.items()) + " (🔥 Smelter)"
             e.add_field(name=f"⛏️ Craft: {nxt.name}",
                         value=f"{nxt.price:,} coins" + (f" + {mats}" if mats else "") +
                               f"\nLuck x{nxt.luck} · {nxt.rolls} ore/swing", inline=False)
@@ -414,9 +418,8 @@ class Game(commands.Cog):
         e.add_field(name=f"🐌 Hire slugling #{user['sluglings'] + 1}",
                     value=f"{cost:,} coins · digs while you're away (up to {engine.collect_cap(user)}h). "
                           "Prestige and backpacks in the 🐌 Slug Den.", inline=False)
-        smeltable = ", ".join(f"{self.db.qty(uid, 'ore:' + b) // data.ORE_PER_BAR}x {n}"
-                              for b, (n, _) in data.BARS.items() if self.db.qty(uid, "ore:" + b) >= data.ORE_PER_BAR)
-        e.add_field(name="🔥 Smelter", value=f"{data.ORE_PER_BAR} ores → 1 bar (small coin fee). Bars craft pickaxes and sell for more. "
+        smeltable = ", ".join(f"{n}x {b.name}" for b in data.BAR_LIST if (n := engine.smeltable(self.db, uid, b.key)))
+        e.add_field(name="🔥 Smelter", value="Ores → bars (small coin fee). Every pickaxe past gold needs its own alloy bar. "
                     "Open the Smelter to pick which bars to make."
                     + (f"\nReady: {smeltable}" if smeltable else ""), inline=False)
         if note:
@@ -439,25 +442,31 @@ class Game(commands.Cog):
         e.set_image(url="attachment://shop.jpg")
         return e, files, v
 
-    def smelter_panel(self, uid, note=None):
+    def smelter_panel(self, uid, note=None, group=None):
         user = self.db.user(uid)
-        e = discord.Embed(title="🔥 Smelter", color=discord.Color.from_rgb(255, 120, 40),
+        if group not in data.SMELT_GROUPS:
+            nxt = engine.next_pickaxe(user)
+            bar = next((i[4:] for i in nxt.materials if i.startswith("bar:")), None) if nxt else None
+            group = data.BARS[bar].group if bar else "metal"
+        title, icon = data.SMELT_GROUPS[group]
+        e = discord.Embed(title=f"🔥 Smelter · {icon} {title}", color=discord.Color.from_rgb(255, 120, 40),
                           description=(note + "\n\n" if note else "") +
-                          f"Pick which bars to make. Each bar takes {data.ORE_PER_BAR} ore plus a small coin fee.")
+                          "Pick which bars to make. Each bar takes the ores shown plus a coin fee.")
         v = discord.ui.View(timeout=None)
-        for b, (name, fee) in data.BARS.items():
-            ore = self.db.qty(uid, "ore:" + b)
-            can = ore // data.ORE_PER_BAR
-            if fee:
-                can = min(can, user["coins"] // fee)
-            e.add_field(name=name, value=f"{ore:,} {ORE_BY_KEY[b].name} ore · can make **{can:,}**\n"
-                                         f"{fee:,} coins each · you have {self.db.qty(uid, 'bar:' + b):,} bars", inline=True)
-            short = name.replace(" Bar", "")
-            v.add_item(B(f"smeltall_{b}", uid, f"All {short} ({can:,})", "🔥", discord.ButtonStyle.success, disabled=can <= 0, row=0))
-            v.add_item(B(f"smeltone_{b}", uid, f"1 {name}", "🧱", disabled=can <= 0, row=1))
-        e.set_footer(text=f"You have {user['coins']:,} coins · Smelt everything skips 🔒 locked ores")
-        v.add_item(B("smelt", uid, "Smelt everything", "🔥", row=2))
-        v.add_item(B("shop", uid, "Back to shop", "↩️", row=2))
+        for b in (b for b in data.BAR_LIST if b.group == group):
+            can = engine.smeltable(self.db, uid, b.key, user["coins"])
+            recipe = " + ".join(f"{q} {ORE_BY_KEY[o].name} ({self.db.qty(uid, 'ore:' + o):,})" for o, q in b.recipe.items())
+            e.add_field(name=f"{b.emoji} {b.name}", value=f"{recipe} · can make **{can:,}**\n"
+                                                         f"{b.fee:,} coins each · you have {self.db.qty(uid, 'bar:' + b.key):,} bars", inline=True)
+            short = b.name.replace(" Bar", "")
+            v.add_item(B(f"smeltall_{b.key}", uid, f"All {short} ({can:,})", "🔥", discord.ButtonStyle.success, disabled=can <= 0, row=0))
+            v.add_item(B(f"smeltone_{b.key}", uid, f"1 {b.name}", b.emoji, disabled=can <= 0, row=1))
+        e.set_footer(text=f"You have {user['coins']:,} coins · Smelt all metals skips 🔒 locked ores and never touches gems")
+        for g, (t, ic) in data.SMELT_GROUPS.items():
+            v.add_item(B(f"smeltpg_{g}", uid, t, ic, discord.ButtonStyle.primary if g == group else discord.ButtonStyle.secondary,
+                         disabled=g == group, row=2))
+        v.add_item(B("smelt", uid, "Smelt all metals", "🔥", row=3))
+        v.add_item(B("shop", uid, "Back to shop", "↩️", row=3))
         return e, [], v
 
     def workshop_panel(self, uid, note=None):
@@ -500,7 +509,7 @@ class Game(commands.Cog):
                 by_tier[o.tier].append((o.chance, f"{lk(item)}{o.name} x{q:,}"))
                 worth += o.value * q
             elif kind == "bar":
-                by_tier["bars"].append((0, f"{lk(item)}{data.BARS[key][0]} x{q:,}"))
+                by_tier["bars"].append((0, f"{lk(item)}{data.BARS[key].name} x{q:,}"))
                 worth += data.bar_value(key) * q
             elif kind == "snack":
                 s = data.SNACK_BY_KEY[key]
@@ -668,6 +677,9 @@ class Game(commands.Cog):
     async def dispatch_action(self, interaction, action, uid):
         if action.startswith(("smeltall_", "smeltone_")) and action[9:] in data.BARS:
             await self.do_smelt(interaction, uid, only=[action[9:]], limit=1 if action.startswith("smeltone_") else None)
+            return
+        if action.startswith("smeltpg_") and action[8:] in data.SMELT_GROUPS:
+            await self.show(interaction, self.smelter_panel(uid, group=action[8:]))
             return
         if action.startswith("mk_") and action[3:] in PART_BY_KEY:
             ok, msg = engine.craft_part(self.db, uid, action[3:])
@@ -986,9 +998,10 @@ class Game(commands.Cog):
         if made:
             note = "🔥 Smelted " + ", ".join(f"{n}x {k}" for k, n in made.items()) + f" for {fee:,} coins."
         else:
-            note = (f"❌ You need {data.ORE_PER_BAR} of an ore (copper, tin, iron, silver or gold) and the coin fee to smelt a bar."
-                    + (" Smelt everything skips 🔒 locked ores, so use the buttons above for those." if only is None and self.db.locked(uid) else ""))
-        await self.show(interaction, self.smelter_panel(uid, note=note))
+            note = ("❌ You need 5 of a metal ore (copper, tin, iron, silver or gold) and the coin fee to smelt a bar."
+                    + (" Smelt all metals skips 🔒 locked ores, so use the buttons above for those." if only is None and self.db.locked(uid) else ""))
+        group = data.BARS[only[0]].group if only else "metal"
+        await self.show(interaction, self.smelter_panel(uid, note=note, group=group))
 
     async def do_rebirthyes(self, interaction, uid):
         ok, msg = engine.rebirth(self.db, uid)

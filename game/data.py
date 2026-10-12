@@ -287,29 +287,54 @@ PICKAXES = [
     Pickaxe("copper", "Copper Pickaxe", 1_500, {"bar:copper": 5}, 1.2, 0.85, 1, (200, 110, 60)),
     Pickaxe("iron", "Iron Pickaxe", 8_000, {"bar:iron": 10}, 1.35, 0.8, 1, (200, 190, 180)),
     Pickaxe("gold", "Golden Pickaxe", 40_000, {"bar:gold": 10}, 1.6, 0.75, 2, (240, 190, 40)),
-    Pickaxe("diamond", "Diamond Pickaxe", 250_000, {"ore:diamond": 1, "bar:gold": 20}, 2.0, 0.7, 2, (170, 235, 255)),
-    Pickaxe("obsidian", "Obsidian Pickaxe", 1_500_000, {"ore:obsidian_heart": 1, "bar:iron": 40}, 2.5, 0.65, 3, (90, 30, 120)),
-    Pickaxe("slugsteel", "Slugsteel Pickaxe", 10_000_000, {"ore:slugheart_opal": 1, "bar:silver": 50}, 3.5, 0.6, 3, (130, 230, 80)),
-    Pickaxe("starbreaker", "Starbreaker", 20_000_000, {"ore:sunshard": 2, "bar:gold": 100}, 4.5, 0.55, 4, (255, 240, 160)),
-    Pickaxe("moon_drill", "Moon Drill", 200_000_000, {"ore:lunar_pearl": 1, "ore:selenite": 5}, 5.5, 0.5, 4, (200, 200, 230)),
-    Pickaxe("plasma", "Plasma Pick", 2_000_000_000, {"ore:red_giant_garnet": 1, "ore:olympus_ruby": 5}, 7.0, 0.45, 5, (255, 90, 40)),
-    Pickaxe("shroom_scythe", "Shroom Scythe", 20_000_000_000, {"ore:mushroom_kings_cap": 1, "ore:bouncy_cap": 5}, 8.5, 0.4, 5, (230, 40, 60)),
-    Pickaxe("lollipick", "Lollipick", 200_000_000_000, {"ore:gobstopper": 1, "ore:cotton_cloud": 5}, 10.0, 0.35, 6, (255, 100, 180)),
-    Pickaxe("void_breaker", "Void Breaker", 5_000_000_000_000, {"ore:horizon_opal": 1, "ore:singularity_shard": 10}, 12.0, 0.3, 7, (120, 40, 220)),
+    # past gold, every pickaxe is made from its own bars, smelted from that tier's ores (see BARS below)
+    Pickaxe("diamond", "Diamond Pickaxe", 250_000, {"bar:diamond": 2}, 2.0, 0.7, 2, (170, 235, 255)),
+    Pickaxe("obsidian", "Obsidian Pickaxe", 1_500_000, {"bar:obsidian": 3}, 2.5, 0.65, 3, (90, 30, 120)),
+    Pickaxe("slugsteel", "Slugsteel Pickaxe", 10_000_000, {"bar:slugsteel": 3}, 3.5, 0.6, 3, (130, 230, 80)),
+    Pickaxe("starbreaker", "Starbreaker", 20_000_000, {"bar:sunsteel": 10}, 4.5, 0.55, 4, (255, 240, 160)),
+    Pickaxe("moon_drill", "Moon Drill", 200_000_000, {"bar:moonsteel": 12}, 5.5, 0.5, 4, (200, 200, 230)),
+    Pickaxe("plasma", "Plasma Pick", 2_000_000_000, {"bar:marsteel": 12}, 7.0, 0.45, 5, (255, 90, 40)),
+    Pickaxe("shroom_scythe", "Shroom Scythe", 20_000_000_000, {"bar:sporesteel": 12}, 8.5, 0.4, 5, (230, 40, 60)),
+    Pickaxe("lollipick", "Lollipick", 200_000_000_000, {"bar:candy": 12}, 10.0, 0.35, 6, (255, 100, 180)),
+    Pickaxe("void_breaker", "Void Breaker", 5_000_000_000_000, {"bar:void": 50}, 12.0, 0.3, 7, (120, 40, 220)),
 ]
 PICKAXE_BY_KEY = {p.key: p for p in PICKAXES}
 
-# smelting: ORE_PER_BAR ores + a coin fee -> 1 bar. Bars sell for more than the ores did.
-ORE_PER_BAR = 5
-BARS = {
-    "copper": ("Copper Bar", 10),
-    "tin": ("Tin Bar", 15),
-    "iron": ("Iron Bar", 30),
-    "silver": ("Silver Bar", 80),
-    "gold": ("Gold Bar", 160),
-}
+@dataclass(frozen=True)
+class Bar:
+    key: str
+    name: str
+    emoji: str
+    fee: int              # coins per bar
+    recipe: dict          # ore key -> how many go into one bar
+    group: str            # Smelter page: "metal", "earth" or "space"
+
+
+# Smelting: ores + a coin fee -> 1 bar. Metal bars take 5 of one ore. Each pickaxe past gold has its own
+# alloy bar, made from the ores of the place you get it (a rare "heart" ore plus a pile of a commoner one).
+SMELT_GROUPS = {"metal": ("Metals", "🧱"), "earth": ("Slug Earth alloys", "🌍"), "space": ("Space alloys", "🚀")}
+BAR_LIST = [
+    Bar("copper", "Copper Bar", "🟫", 10, {"copper": 5}, "metal"),
+    Bar("tin", "Tin Bar", "⬜", 15, {"tin": 5}, "metal"),
+    Bar("iron", "Iron Bar", "⬛", 30, {"iron": 5}, "metal"),
+    Bar("silver", "Silver Bar", "🥈", 80, {"silver": 5}, "metal"),
+    Bar("gold", "Gold Bar", "🥇", 160, {"gold": 5}, "metal"),
+    Bar("diamond", "Diamond Bar", "💎", 5_000, {"diamond": 2}, "earth"),
+    Bar("obsidian", "Obsidian Bar", "🟪", 20_000, {"obsidian_heart": 2}, "earth"),
+    Bar("slugsteel", "Slugsteel Bar", "🐌", 50_000, {"slugheart_opal": 1, "iron": 10}, "earth"),
+    Bar("sunsteel", "Sunsteel Bar", "☀️", 25_000, {"sunshard": 1, "gold": 10}, "earth"),
+    Bar("moonsteel", "Moonsteel Bar", "🌕", 700_000, {"lunar_pearl": 1, "selenite": 5}, "space"),
+    Bar("marsteel", "Marsteel Bar", "🔴", 7_000_000, {"red_giant_garnet": 1, "olympus_ruby": 5}, "space"),
+    Bar("sporesteel", "Sporesteel Bar", "🍄", 70_000_000, {"mushroom_kings_cap": 1, "bouncy_cap": 5}, "space"),
+    Bar("candy", "Candy Bar", "🍫", 700_000_000, {"gobstopper": 1, "cotton_cloud": 5}, "space"),
+    Bar("void", "Void Bar", "🕳️", 4_000_000_000, {"horizon_opal": 1, "singularity_shard": 10}, "space"),
+]
+BARS = {b.key: b for b in BAR_LIST}
+
+
 def bar_value(bar):
-    return int(ORE_BY_KEY[bar].value * ORE_PER_BAR * 1.4)
+    """Coins a bar sells for: 1.4x the ores that went into it."""
+    return sum(ORE_BY_KEY[o].value * n for o, n in BARS[bar].recipe.items()) * 14 // 10
 
 
 # Sluglings are hired helpers that mine while you're away.

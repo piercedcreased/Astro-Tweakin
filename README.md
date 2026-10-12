@@ -22,8 +22,8 @@ Flying to a new planet costs coins, rare ores and rocket parts you build in the 
 | 🎰 Lucky Roll | Spins a reel every 10 minutes: coins, x1.5 to x10 luck, Midas Touch (sell value), Mutation Magnet, or Echo Swing (2x mines). |
 | 🕳️ Mines | Pick which unlocked cave layer to dig in, or unlock the next one. |
 | 💰 Sell | Lives in 🎒 Inventory only: Sell junk (keeps Epic+ ores, mutations, bars and upgrade materials), a picker to sell exactly what you choose, or Sell everything (asks first). |
-| 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt everything, or fenced. |
-| 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars. |
+| 🔒 Lock | Lock items from the Inventory menu or `/lock` so they're never sold, smelted by Smelt all metals, or fenced. |
+| 🛒 Shop | Craft the next pickaxe, dig deeper / launch / warp, hire sluglings, smelt bars (metal bars, plus an alloy bar for each pickaxe past gold: `BARS` in `game/data.py`). |
 | 🔧 Workshop | Build rocket parts (fuel, hull, nav computer, oxygen, warp core...) from ores. |
 | 🐌 Collect | Sluglings dig 1 ore a minute each while you're offline (up to 12h). |
 | `/rebirth` | "Burn the lab down" at Slug Core with 50M coins: reset for +50% luck and +25% sell value forever. |

@@ -440,6 +440,7 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
     sold = 0
     cap = data.TIER_ORDER.index(max_tier) if max_tier else None
     locked = db.locked(uid)
+    needs = next_pick_needs(user, db)
     for item, qty in db.items(uid).items():
         if item in locked:
             continue                            # locked items are never sold
@@ -451,7 +452,7 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
             if cap is not None and data.TIER_ORDER.index(ore.tier) > cap:
                 continue
             # keep materials needed for the next pickaxe
-            keep = next_pick_needs(user).get(item, 0)
+            keep = needs.get(item, 0)
             n = qty - keep
             if n <= 0:
                 continue
@@ -465,7 +466,7 @@ def sell_all(db, uid, keep_rare=True, max_tier=None):
         elif kind == "bar":
             if keep_rare or cap is not None:
                 continue                        # bars are crafting material, only "sell everything" sells them
-            keep = next_pick_needs(user).get(item, 0)
+            keep = needs.get(item, 0)
             n = qty - keep
             if n <= 0:
                 continue
@@ -487,7 +488,7 @@ def sell_items(db, uid, items):
     user = db.user(uid)
     mult = sell_mult(user, db)
     locked = db.locked(uid)
-    needs = next_pick_needs(user)
+    needs = next_pick_needs(user, db)
     total = sold = 0
     skipped = []
     for item in dict.fromkeys(items):
@@ -575,8 +576,9 @@ def next_pickaxe(user):
     return PICKAXES[idx + 1] if idx + 1 < len(PICKAXES) else None
 
 
-def next_pick_needs(user):
-    """Items Sell won't touch: what the next pickaxe and next planet need, plus the ores for those parts."""
+def next_pick_needs(user, db=None):
+    """Items Sell won't touch: what the next pickaxe and next planet need, plus the ores for those parts
+    and bars. With db, bars you already have count, so only the ores for the rest are kept."""
     needs = collections.Counter()
     nxt = next_pickaxe(user)
     if nxt:
@@ -587,6 +589,11 @@ def next_pick_needs(user):
             if item.startswith("part:"):
                 for sub, q in PART_BY_KEY[item[5:]].materials.items():
                     needs[sub] += q * qty
+    for item, qty in list(needs.items()):
+        if item.startswith("bar:"):
+            short = qty - (db.qty(user["id"], item) if db else 0)
+            for ore, n in data.BARS[item[4:]].recipe.items():
+                needs["ore:" + ore] += n * max(0, short)
     return dict(needs)
 
 
@@ -609,7 +616,7 @@ def item_name(item):
         return "Enchanted Crack Rock"
     if kind == "tag":
         return data.TAG_BY_KEY[key].name
-    return data.BARS[key][0]
+    return data.BARS[key].name
 
 
 def missing_for(db, uid, coins, materials):
@@ -716,33 +723,37 @@ def ascend(db, uid):
     return travel(db, uid, user["layer"] - 1)
 
 
+def smeltable(db, uid, bar, coins=None):
+    """How many of a bar you could smelt from the ores you have (and, with coins, can pay the fee for)."""
+    b = data.BARS[bar]
+    n = min(db.qty(uid, "ore:" + ore) // q for ore, q in b.recipe.items())
+    return min(n, coins // b.fee) if coins is not None and b.fee else n
+
+
 @atomic
 def smelt_all(db, uid, only=None, limit=None):
-    """Smelts every bar ore you have enough of. only=[ore keys] smelts just those (even if locked);
-    otherwise locked ores are skipped. limit caps how many bars of each type get made."""
+    """Smelts every metal bar you have the ore for. only=[bar keys] smelts just those (even locked ores,
+    and alloys too); otherwise it sticks to metal bars and skips locked ores, so a gem you need for a
+    launch or a part never gets smelted by accident. limit caps how many bars of each type get made."""
     user = db.user(uid)
     made = {}
     fee = 0
     locked = db.locked(uid)
-    for bar, (name, cost) in data.BARS.items():
-        if only is not None and bar not in only:
+    for bar in data.BAR_LIST:
+        if only is not None and bar.key not in only:
             continue
-        if only is None and "ore:" + bar in locked:
+        if only is None and (bar.group != "metal" or any("ore:" + o in locked for o in bar.recipe)):
             continue
-        have = db.qty(uid, "ore:" + bar)
-        n = have // data.ORE_PER_BAR
+        n = smeltable(db, uid, bar.key, user["coins"] - fee)
         if limit is not None:
             n = min(n, limit)
         if n <= 0:
             continue
-        coins_left = user["coins"] - fee
-        n = min(n, coins_left // cost) if cost else n
-        if n <= 0:
-            continue
-        db.add_item(uid, "ore:" + bar, -n * data.ORE_PER_BAR)
-        db.add_item(uid, "bar:" + bar, n)
-        fee += n * cost
-        made[name] = n
+        for ore, q in bar.recipe.items():
+            db.add_item(uid, "ore:" + ore, -n * q)
+        db.add_item(uid, "bar:" + bar.key, n)
+        fee += n * bar.fee
+        made[bar.name] = n
     db.add_coins(uid, -fee)
     db.bump(uid, "smelted", sum(made.values()))
     return made, fee
