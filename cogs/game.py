@@ -478,18 +478,24 @@ class Game(commands.Cog):
             return
         prize = engine.pick_prize()
         msg_text = engine.apply_prize(self.db, uid, prize)
+        # the reel plays inside the /mine panel itself (no extra message), then the panel comes back with the prize
+        await interaction.response.defer()
         gif = await asyncio.to_thread(images.reel_gif, prize)
-        await self.show(interaction, self.main_panel(uid, headline="🎰 Rolling..."))
-        e = discord.Embed(title=f"🎰 {interaction.user.display_name}'s Lucky Roll", color=color_of(prize.color))
+        e = discord.Embed(title=f"🎰 {interaction.user.display_name}'s Lucky Roll", description="Rolling...",
+                          color=color_of(prize.color))
         e.set_image(url="attachment://roll.gif")
-        msg = await interaction.followup.send(embed=e, file=discord.File(io.BytesIO(gif), filename="roll.gif"), wait=True)
-        await asyncio.sleep(2.2)
-        e.description = msg_text
-        e.set_image(url="attachment://prize.png")
+        mid = interaction.message.id if interaction.message else None
+        if mid:
+            self.thumbs[mid] = "roll"   # the next panel edit must replace these attachments, not keep them
         try:
-            await msg.edit(embed=e, attachments=[discord.File(io.BytesIO(images.prize_card(prize)), filename="prize.png")])
-            e2, files, v = self.main_panel(uid, headline=f"🎰 {msg_text}")
-            await interaction.edit_original_response(embed=e2, attachments=files, view=v)
+            await interaction.edit_original_response(embed=e, view=None,
+                                                     attachments=[discord.File(io.BytesIO(gif), filename="roll.gif")])
+            await asyncio.sleep(2.2)
+            e2, _, v = self.main_panel(uid, headline=f"🎰 {msg_text}")
+            e2.color = color_of(prize.color)
+            e2.set_image(url="attachment://prize.png")
+            await interaction.edit_original_response(
+                embed=e2, view=v, attachments=[discord.File(io.BytesIO(images.prize_card(prize)), filename="prize.png")])
         except discord.HTTPException:
             pass
 
