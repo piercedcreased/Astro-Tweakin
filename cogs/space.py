@@ -181,9 +181,9 @@ class Space(commands.Cog):
         fee = space.asteroid_fee(user)
         e = discord.Embed(title="☄️ Asteroid Run", color=discord.Color.from_rgb(255, 170, 60), description=(
             (note + "\n\n" if note else "") +
-            f"Fly through an asteroid field to Tim's station. Every press flies you one row up: straight, "
-            f"or diagonally up-left or up-right. Rocks beside you can't hit you, only the one in the cell you fly into. "
-            f"Take your time and plan ahead.\n\n"
+            f"Fly through an asteroid field to Tim's station. Every press moves you one lane (or straight on) "
+            f"and every asteroid falls one row. Steer toward a rock right beside you and you hop up and over it "
+            f"instead of hitting it. Take your time and plan ahead.\n\n"
             f"✨ Fly through glowing ore chunks to grab them (x{data.ASTEROID_LUCK:g} luck)\n"
             f"🏁 Survive **{data.ASTEROID_MOVES}** moves to dock: keep every chunk + **{fee * data.ASTEROID_BONUS:,}** coins\n"
             f"💥 Hit a rock: you keep half your chunks\n"
@@ -217,9 +217,9 @@ class Space(commands.Cog):
             # the move number is in each button, so a press made on an older picture (while the last press was
             # still loading) is ignored instead of steering from a position you couldn't see
             m = run.moves
-            v.add_item(B(f"ar_l_{m}", uid, None, "↖️", discord.ButtonStyle.primary, disabled=run.lane == 0))
+            v.add_item(B(f"ar_l_{m}", uid, None, "⬅️", discord.ButtonStyle.primary, disabled=run.lane == 0))
             v.add_item(B(f"ar_s_{m}", uid, None, "⬆️", discord.ButtonStyle.primary))
-            v.add_item(B(f"ar_r_{m}", uid, None, "↗️", discord.ButtonStyle.primary, disabled=run.lane == data.ASTEROID_LANES - 1))
+            v.add_item(B(f"ar_r_{m}", uid, None, "➡️", discord.ButtonStyle.primary, disabled=run.lane == data.ASTEROID_LANES - 1))
             v.add_item(B("ar_bail", uid, "Bail out", "🏳️", discord.ButtonStyle.secondary))
         return e, files, v
 
@@ -263,7 +263,7 @@ class Space(commands.Cog):
         if run.state == "docked":
             note = f"🏁 **Docked at Tim's station!** +**{coins:,}** coins and your ore:\n{haul}"
         elif run.state == "crashed":
-            how = ("You flew diagonally into the rock you were heading for." if run.hit_how == "steered" else
+            how = ("You hopped up over the rock beside you, straight into another one." if run.hit_how == "steered" else
                    "A rock fell straight down onto you (it was right above your rocket).")
             note = (f"💥 **Crashed after {run.moves} moves!** {how} You grabbed {len(before)} chunk(s) and kept "
                     f"{len(kept)}:\n{haul}")

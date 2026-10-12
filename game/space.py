@@ -740,17 +740,27 @@ def _land(run, how):
 
 
 def asteroid_step(run, move):
-    """move: -1 up-left, 0 straight up, +1 up-right. Everything falls one row and the rocket moves into its new
-    lane in the same step, so a sideways move is diagonal: a rock right beside you can't hit you, only the rock
-    in the cell you're heading for can."""
+    """move: -1 left, 0 straight, +1 right. Everything falls one row.
+    A sideways move normally slides you over first and then the rocks fall. If a rock is right beside you on that
+    side, you don't steer into it: you go up and over it instead (rocks fall first, then you move diagonally)."""
     if run.done:
         return
-    old = run.lane
-    run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
-    run.lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
-    _land(run, "steered" if run.lane != old else "fell")
+    row = data.ASTEROID_ROWS - 1
+    lane = max(0, min(data.ASTEROID_LANES - 1, run.lane + move))
+    if lane != run.lane and run.grid[row][lane] == ROCK:
+        run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
+        run.lane = lane
+        _land(run, "steered")
+    else:
+        run.lane = lane
+        _land(run, "steered")       # can only be a chunk here: a rock beside you sends you up and over instead
+        if not run.done:
+            run.grid = [_asteroid_row(run.moves + 1)] + run.grid[:-1]
+            _land(run, "fell")
+    if run.done:
+        return
     run.moves += 1
-    if not run.done and run.moves >= data.ASTEROID_MOVES:
+    if run.moves >= data.ASTEROID_MOVES:
         run.state = "docked"
 
 

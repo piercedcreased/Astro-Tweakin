@@ -421,8 +421,8 @@ class Game(commands.Cog):
         v.add_item(B("en", uid, "Enchant", "✨", row=1))
         v.add_item(B("sl", uid, "Slug Den", "🐌", row=1))
         v.add_item(B("cr", uid, "Crates", "📦", row=1))
-        v.add_item(B("back", uid, "Back", "↩️", row=1))
         v.add_item(B("mkt", uid, "Market", "🏪", discord.ButtonStyle.primary, row=2))
+        v.add_item(B("back", uid, "Back", "↩️", row=2))
         goals = engine.goals(self.db, uid)
         key = f"shop:{user['coins']}:{nxt.key if nxt else ''}:{goals}"
         files = [Pic("shop.jpg", key, lambda: images.shop_banner(user["coins"], goals, nxt))]
@@ -525,12 +525,12 @@ class Game(commands.Cog):
         v.add_item(B("sellall", uid, "Sell everything...", "⚠️", discord.ButtonStyle.danger))
         v.add_item(B("snacks", uid, "Snacks", "🍬"))
         v.add_item(B("ship", uid, "Ship", "🚀"))
-        v.add_item(B("back", uid, "Back", "↩️"))
         v.add_item(B("cr", uid, "Crates", "📦", row=3))
         v.add_item(B("en", uid, "Enchant", "✨", row=3))
         n_tags = sum(q for i, q in items.items() if i.startswith("tag:"))
         v.add_item(B("tags", uid, f"Tags ({n_tags})" if n_tags else "Tags", "🏷️", row=3))
         v.add_item(B("mkt", uid, "Market", "🏪", row=3))
+        v.add_item(B("back", uid, "Back", "↩️", row=3))
         sellable = [(i, q) for i, q in items.items() if i.split(":", 1)[0] in ("ore", "bar", "mut") and i not in locked]
         if sellable:
             # commonest first: that's usually what you want gone
