@@ -718,8 +718,8 @@ MINIGAME_CHANCE = 1_000                   # 1 in N per Mine press
 MINIGAME_PITY = 250                       # guaranteed after this many presses without one
 
 # ---- Space Jack (blackjack against Tim)
-JACK_BETS = (1, 5, 25)                    # x JACK_BASE x layer scale
-JACK_BASE = 1_000
+JACK_BASE = 1_000                         # x layer scale = the bet suggested in the bet box
+JACK_MIN_BET = 100                        # you can bet any amount from this up to all your coins
 
 
 # ---- v0.8.0 multiplayer

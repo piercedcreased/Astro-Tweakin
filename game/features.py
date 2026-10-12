@@ -293,16 +293,17 @@ class JackHand:
         return self.state != "playing"
 
 
-def jack_bet(user, mult):
+def jack_bet(user, mult=1):
+    """A suggested bet for where you are (the default in the bet box)."""
     return data.JACK_BASE * scale(user) * mult
 
 
 @atomic
-def jack_deal(db, uid, mult):
-    if mult not in data.JACK_BETS:
-        return None, "That's not a bet size."
+def jack_deal(db, uid, bet):
+    """Deals a hand for any bet you can afford."""
+    if bet < data.JACK_MIN_BET:
+        return None, f"The smallest bet is {data.JACK_MIN_BET:,} coins."
     user = db.user(uid)
-    bet = jack_bet(user, mult)
     if user["coins"] < bet:
         return None, f"That bet is **{bet:,}** coins. You have {user['coins']:,}."
     db.add_coins(uid, -bet)

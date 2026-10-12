@@ -40,7 +40,7 @@ Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/lead
 | 📅 Daily calendar | 7 days (`CALENDAR`), day 7 is a Cosmic Crate, a missed day only knocks you back one step. |
 | 🐌 Slug Den | Prestige 10 sluglings into a better rank (`SLUG_RANKS`), Bigger Backpacks raise the offline cap to 24h. |
 | 🎲 Minigames | 1 in 1,000 per Mine, guaranteed after 250 (`MINIGAME_*`). Always pays; right answers give a Supply Crate. |
-| 🃏 Space Jack | Blackjack vs Tim in the 🎮 Arcade. Unfinished hands are refunded if the bot restarts. |
+| 🃏 Space Jack | Blackjack vs Tim in the 🎮 Arcade. One Space Jack button: type any bet (min `JACK_MIN_BET`). Unfinished hands are refunded if the bot restarts. |
 | 📜 Bounties | Daily, weekly and monthly boards with page buttons. |
 
 **v0.8.0 (Multiplayer)**

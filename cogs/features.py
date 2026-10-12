@@ -25,6 +25,28 @@ def weather_line(user):
             + f" · changes in {fmt_time(engine.weather_ends() - time.time())}")
 
 
+class JackBetModal(discord.ui.Modal, title="🃏 Space Jack"):
+    def __init__(self, cog, uid, suggested):
+        super().__init__()
+        self.cog, self.uid = cog, uid
+        self.bet = discord.ui.TextInput(label="Your bet in coins (5k, 1.5m work too)", default=f"{suggested:,}", max_length=20)
+        self.add_item(self.bet)
+
+    async def on_submit(self, interaction):
+        from cogs.multi import parse_amount
+        cog, uid = self.cog, self.uid
+        bet = parse_amount(self.bet.value)
+        try:
+            async with cog.game.locks[uid]:
+                if not bet:
+                    await cog.show(interaction, cog.arcade_panel(uid, "❌ Type a number of coins, like `5000` or `5k`."))
+                else:
+                    await cog.jack_action(interaction, f"bet_{bet}", uid)
+        except Exception:
+            log.exception("Space Jack bet failed for %s", uid)
+            await cog.game.oops(interaction, "Something went wrong. Your coins are safe.")
+
+
 class Features(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -298,12 +320,10 @@ class Features(commands.Cog):
             "🪨 **Rock Paper Scissors**: challenge a friend with `/rps @player [bet]`."))
         e.set_footer(text=f"You have {user['coins']:,} coins")
         v = discord.ui.View(timeout=None)
-        for m in data.JACK_BETS:
-            bet = features.jack_bet(user, m)
-            v.add_item(B(f"bj_bet_{m}", uid, f"Space Jack: bet {bet:,}", "🃏", discord.ButtonStyle.success,
-                         disabled=user["coins"] < bet))
-        v.add_item(B("ar_start", uid, "Asteroid Run", "☄️", discord.ButtonStyle.primary, row=1))
-        v.add_item(B("back", uid, "Back", "↩️", row=1))
+        v.add_item(B("bj_any", uid, "Space Jack", "🃏", discord.ButtonStyle.success,
+                     disabled=user["coins"] < data.JACK_MIN_BET))
+        v.add_item(B("ar_start", uid, "Asteroid Run", "☄️", discord.ButtonStyle.primary))
+        v.add_item(B("back", uid, "Back", "↩️"))
         return e, [], v
 
     @staticmethod
@@ -327,9 +347,10 @@ class Features(commands.Cog):
         e.set_footer(text=f"You have {user['coins']:,} coins · Tim stands on 17")
         v = discord.ui.View(timeout=None)
         if h.done:
-            mult = next((m for m in data.JACK_BETS if features.jack_bet(user, m) * (2 if h.doubled else 1) == h.bet), data.JACK_BETS[0])
-            v.add_item(B(f"bj_bet_{mult}", uid, "Deal again", "🃏", discord.ButtonStyle.success,
-                         disabled=user["coins"] < features.jack_bet(user, mult)))
+            bet = h.bet // 2 if h.doubled else h.bet
+            v.add_item(B(f"bj_bet_{bet}", uid, f"Deal again ({bet:,})"[:80], "🃏", discord.ButtonStyle.success,
+                         disabled=user["coins"] < bet))
+            v.add_item(B("bj_any", uid, "Change bet", "✏️"))
             v.add_item(B("arcade", uid, "Arcade", "🎮"))
             v.add_item(B("back", uid, "Back to mine", "↩️"))
         else:
@@ -341,6 +362,13 @@ class Features(commands.Cog):
 
     async def jack_action(self, interaction, what, uid):
         note = None
+        if what == "any":
+            old = self.hands.get(uid)
+            if old and not old.done:
+                await self.show(interaction, self.jack_panel(uid, old, "Finish this hand first."))
+                return
+            await interaction.response.send_modal(JackBetModal(self, uid, features.jack_bet(self.db.user(uid))))
+            return
         if what.startswith("bet_"):
             old = self.hands.get(uid)
             if old and not old.done:
