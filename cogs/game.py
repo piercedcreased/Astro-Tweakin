@@ -258,13 +258,20 @@ class Game(commands.Cog):
         v = discord.ui.View(timeout=None)
         roll_wait = engine.lucky_roll_ready(user)
         v.add_item(B("mine", uid, "Mine", "⛏️", discord.ButtonStyle.success))
+        # never disabled: the countdown label goes stale, so a press while charging just refreshes it
         v.add_item(B("roll", uid, "Lucky Roll" if roll_wait <= 0 else f"Roll in {fmt_time(roll_wait)}", "🎰",
-                     discord.ButtonStyle.primary, disabled=roll_wait > 0))
-        v.add_item(B("collect", uid, "Collect", "🐌", disabled=user["sluglings"] == 0))
+                     discord.ButtonStyle.primary if roll_wait <= 0 else discord.ButtonStyle.secondary))
+        if user["sluglings"]:
+            waiting, full = engine.slugs_waiting(self.db, user)
+            v.add_item(B("collect", uid, f"Collect ({'full! ' if full else ''}{engine.short_num(waiting)})", "🐌",
+                         discord.ButtonStyle.success if full else discord.ButtonStyle.secondary))
+        else:
+            v.add_item(B("collect", uid, "Collect", "🐌", disabled=True))
         v.add_item(B("arcade", uid, "Arcade", "🎮"))
         v.add_item(B("mines", uid, "Mines", "🕳️", row=1))
         v.add_item(B("inv", uid, "Inventory", "🎒", row=1))
         v.add_item(B("shop", uid, "Shop", "🛒", row=1))
+        ready += engine.calendar_state(user)[1] <= 0        # the daily reward counts as one more thing waiting
         v.add_item(B("player", uid, f"Player ({ready} ready!)" if ready else "Player", "👤",
                      discord.ButtonStyle.success if ready else discord.ButtonStyle.secondary, row=1))
         v.add_item(B("settings", uid, None, "⚙️", row=1))
@@ -297,6 +304,9 @@ class Game(commands.Cog):
         ready = self.bounties_ready(uid)
         if ready:
             e.description = (e.description or "") + f"\n\n📜 **{ready} bounty{' is' if ready == 1 else 'ies are'} ready to claim!** (👤 Player → Bounties)"
+        if engine.calendar_state(user)[1] <= 0:
+            e.description = (e.description or "") + ("\n" if ready else "\n\n") + \
+                f"📅 **Day {engine.calendar_state(user)[0]} of your daily calendar is ready!** (👤 Player → Daily)"
         if note:
             e.add_field(name="​", value=note, inline=False)
         status = self.status_text(user)
@@ -791,8 +801,8 @@ class Game(commands.Cog):
     async def do_roll(self, interaction, uid):
         user = self.db.user(uid)
         if engine.lucky_roll_ready(user) > 0:
-            await interaction.response.send_message(
-                f"Your Lucky Roll recharges in {fmt_time(engine.lucky_roll_ready(user))}.", ephemeral=True)
+            await self.show(interaction, self.main_panel(
+                uid, headline=f"🎰 Your Lucky Roll recharges in **{fmt_time(engine.lucky_roll_ready(user))}**."))
             return
         prize = engine.pick_prize()
         msg_text = engine.apply_prize(self.db, uid, prize)

@@ -356,6 +356,14 @@ def goals(db, uid):
     return out
 
 
+def short_num(n):
+    """1234 -> 1.2k, 5_600_000 -> 5.6M, for button labels."""
+    for div, suf in ((10 ** 12, "T"), (10 ** 9, "B"), (10 ** 6, "M"), (10 ** 3, "k")):
+        if n >= div:
+            return f"{n / div:.1f}".rstrip("0").rstrip(".") + suf
+    return f"{n:,}"
+
+
 def bar(frac, width=10):
     full = int(round(frac * width))
     return "▰" * full + "▱" * (width - full)
@@ -734,6 +742,14 @@ def collect_cap(user):
     return data.SLUG_PACKS[min(user["slug_pack"], len(data.SLUG_PACKS) - 1)]
 
 
+def slugs_waiting(db, user, now=None):
+    """(ores dug since the last collect, is the backpack full?)"""
+    now = now or time.time()
+    since = now - user["last_collect"]
+    cap = collect_cap(user) * 3600
+    return slug_output(db, user, min(since, cap)), since >= cap
+
+
 def slug_output(db, user, elapsed):
     """Ores the crew digs in `elapsed` seconds: 1 a minute each, x their rank's speed and the Whisperer enchant."""
     per = data.SLUG_RANKS[user["slug_rank"]][2] * enchant_bonus(db, user["id"], "whisperer")
@@ -760,10 +776,15 @@ def hire_slugling(db, uid):
 def collect_sluglings(db, uid):
     user = db.user(uid)
     now = time.time()
-    elapsed = min(now - user["last_collect"], collect_cap(user) * 3600)
-    db.set(uid, last_collect=now)
-    if user["sluglings"] <= 0 or elapsed < data.SLUGLING_SECONDS_PER_ROLL:
+    cap = collect_cap(user) * 3600
+    elapsed = min(now - user["last_collect"], cap)
+    if user["sluglings"] <= 0:
+        db.set(uid, last_collect=now)
         return [], elapsed, []
+    if elapsed < data.SLUGLING_SECONDS_PER_ROLL:
+        return [], elapsed, []          # too early: keep the clock running instead of throwing the time away
+    # the unfinished minute carries over to the next collect (unless the backpack was already full)
+    db.set(uid, last_collect=now if now - user["last_collect"] >= cap else now - elapsed % data.SLUGLING_SECONDS_PER_ROLL)
     n = slug_output(db, user, elapsed)
     n = min(n, 100_000)
     luck = luck_for(db, user, base=data.SLUG_RANKS[user["slug_rank"]][3]).total

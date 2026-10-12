@@ -47,7 +47,7 @@ def parse_amount(text):
 
 # ================================================================ Rock Paper Scissors buttons
 
-class RPSButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rps:(?P<pick>[rpsx]):(?P<gid>\d+)"):
+class RPSButton(discord.ui.DynamicItem[discord.ui.Button], template=r"rps:(?P<pick>[rpsxm]):(?P<gid>\d+)"):
     """A Rock Paper Scissors button. Either player can press it."""
 
     def __init__(self, pick, gid, label=None, style=discord.ButtonStyle.secondary, emoji=None):
@@ -115,6 +115,7 @@ class Multi(commands.Cog):
         self.db = bot.db
         self.rps = {}                 # game id -> multi.RPSGame
         self.rps_locks = {}
+        self.rps_recent = {}          # finished game id -> RPSGame, for the Rematch button
         self.market_view = {}         # uid -> (category, page) last browsed
         self.bg_tasks = set()
         n = multi.expire(self.db)
@@ -416,27 +417,58 @@ class Multi(commands.Cog):
         if bet and (me["coins"] < bet or them["coins"] < bet):
             await interaction.response.send_message(f"You both need **{bet:,}** coins for that bet.", ephemeral=True)
             return
-        gid = int(time.time() * 1000) % 1_000_000_000
-        while gid in self.rps:
-            gid += 1
-        g = multi.RPSGame(gid, uid, member.id, bet, {uid: interaction.user.display_name, member.id: member.display_name},
-                          expires=time.time() + data.RPS_TIMEOUT)
-        self.rps[gid] = g
-        self.rps_locks[gid] = asyncio.Lock()
         await interaction.response.defer()
         a1, a2 = await asyncio.gather(self._avatar(interaction.user), self._avatar(member))
-        g.avatars = {uid: a1, member.id: a2}
+        await self._rps_start(interaction, uid, member.id, bet, {uid: interaction.user.display_name, member.id: member.display_name},
+                              {uid: a1, member.id: a2})
+
+    async def _rps_start(self, interaction, a, b, bet, names, avatars):
+        """Posts a new game (the interaction must already be answered with defer())."""
+        gid = int(time.time() * 1000) % 1_000_000_000
+        while gid in self.rps or gid in self.rps_recent:
+            gid += 1
+        g = multi.RPSGame(gid, a, b, bet, names, avatars, expires=time.time() + data.RPS_TIMEOUT)
+        self.rps[gid] = g
+        self.rps_locks[gid] = asyncio.Lock()
         e = self._rps_embed(g, f"Both of you pick in secret: a ❗ means that player has picked. The picks are revealed when "
-                               f"you've both chosen.\n{member.mention}, picking means you accept"
+                               f"you've both chosen.\n<@{b}>, picking means you accept"
                                + (" the bet." if bet else ".") + f" Game ends <t:{int(g.expires)}:R>.")
         try:
-            msg = await interaction.followup.send(content=member.mention, embed=e, file=await self._rps_pic(g, ["wait", "wait"]),
+            msg = await interaction.followup.send(content=f"<@{b}>", embed=e, file=await self._rps_pic(g, ["wait", "wait"]),
                                                   view=rps_view(gid), allowed_mentions=discord.AllowedMentions(users=True),
                                                   wait=True)
         except discord.HTTPException:
             self._rps_forget(g)
             raise
         self._bg(self._rps_timeout(g, msg))
+
+    async def rps_rematch(self, interaction, gid):
+        old = self.rps_recent.get(gid)
+        uid = interaction.user.id
+        if old is None or time.time() > old.expires:
+            await interaction.response.send_message("That rematch already started or ran out. Start a new game with `/rps @player`.",
+                                                    ephemeral=True)
+            return
+        if uid not in (old.a, old.b):
+            await interaction.response.send_message("Only the two players can call a rematch.", ephemeral=True)
+            return
+        other = old.b if uid == old.a else old.a
+        if any(not g.done and {g.a, g.b} == {uid, other} for g in self.rps.values()):
+            await interaction.response.send_message("You two already have a game going.", ephemeral=True)
+            return
+        if old.bet and (self.db.user(uid)["coins"] < old.bet or self.db.user(other)["coins"] < old.bet):
+            await interaction.response.send_message(f"You both need **{old.bet:,}** coins for a rematch at the same bet.",
+                                                    ephemeral=True)
+            return
+        self.rps_recent.pop(gid, None)
+        await interaction.response.defer()
+        try:
+            await interaction.message.edit(view=None)
+        except (discord.HTTPException, AttributeError):
+            pass
+        names = dict(old.names)
+        names[uid] = interaction.user.display_name
+        await self._rps_start(interaction, uid, other, old.bet, names, old.avatars)
 
     async def _rps_timeout(self, g, msg):
         while not g.done and time.time() < g.expires:
@@ -461,6 +493,9 @@ class Multi(commands.Cog):
         self.rps_locks.pop(g.gid, None)
 
     async def rps_press(self, interaction, pick, gid):
+        if pick == "m":
+            await self.rps_rematch(interaction, gid)
+            return
         g = self.rps.get(gid)
         uid = interaction.user.id
         if g is None or g.done:
@@ -517,8 +552,14 @@ class Multi(commands.Cog):
             wn = images.safe_name(g.names[win], "WINNER").upper()
             e = self._rps_embed(g, f"{data.RPS[wp][0]} **{data.RPS[wp][1]}** beats {data.RPS[lp][0]} **{data.RPS[lp][1]}**!\n"
                                    f"🏆 <@{win}> wins!{money}", discord.Color.gold())
+            now = time.time()
+            self.rps_recent = {k: v for k, v in self.rps_recent.items() if v.expires > now}
+            g.expires = now + 600          # the Rematch button works for 10 minutes
+            self.rps_recent[gid] = g
+            again = discord.ui.View(timeout=None)
+            again.add_item(RPSButton("m", gid, "Rematch" + (f" ({g.bet:,})" if g.bet else ""), discord.ButtonStyle.success, "🔁"))
             await interaction.response.edit_message(
-                embed=e, view=None, attachments=[await self._rps_pic(g, [pa, pb], winner=w, banner=f"{wn} WINS!")])
+                embed=e, view=again, attachments=[await self._rps_pic(g, [pa, pb], winner=w, banner=f"{wn} WINS!")])
         sp = self.bot.get_cog("Space")
         if sp:
             await sp.after_action(interaction, win)
