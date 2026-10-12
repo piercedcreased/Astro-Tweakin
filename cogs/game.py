@@ -258,9 +258,8 @@ class Game(commands.Cog):
         v = discord.ui.View(timeout=None)
         roll_wait = engine.lucky_roll_ready(user)
         v.add_item(B("mine", uid, "Mine", "⛏️", discord.ButtonStyle.success))
-        # never disabled: the countdown label goes stale, so a press while charging just refreshes it
         v.add_item(B("roll", uid, "Lucky Roll" if roll_wait <= 0 else f"Roll in {fmt_time(roll_wait)}", "🎰",
-                     discord.ButtonStyle.primary if roll_wait <= 0 else discord.ButtonStyle.secondary))
+                     discord.ButtonStyle.primary, disabled=roll_wait > 0))
         if user["sluglings"]:
             waiting, full = engine.slugs_waiting(self.db, user)
             v.add_item(B("collect", uid, f"Collect ({'full! ' if full else ''}{engine.short_num(waiting)})", "🐌",
@@ -801,8 +800,8 @@ class Game(commands.Cog):
     async def do_roll(self, interaction, uid):
         user = self.db.user(uid)
         if engine.lucky_roll_ready(user) > 0:
-            await self.show(interaction, self.main_panel(
-                uid, headline=f"🎰 Your Lucky Roll recharges in **{fmt_time(engine.lucky_roll_ready(user))}**."))
+            await interaction.response.send_message(
+                f"Your Lucky Roll recharges in {fmt_time(engine.lucky_roll_ready(user))}.", ephemeral=True)
             return
         prize = engine.pick_prize()
         msg_text = engine.apply_prize(self.db, uid, prize)
