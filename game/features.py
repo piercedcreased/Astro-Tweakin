@@ -130,6 +130,11 @@ def open_crate(db, uid, key):
     if kind == "crack":
         db.add_item(uid, data.CRACK_ROCK, 1)
         return True, CrateResult(kind, "💎 an **Enchanted Crack Rock**!")
+    if kind == "tag":
+        from . import multi
+        tag = multi.random_tag()
+        db.add_item(uid, "tag:" + tag.key, 1)
+        return True, CrateResult(kind, f"{tag.emoji} a **{tag.name}**! Use it from 🎒 Inventory → 🏷️ Tags, or sell it on the 🏪 Market.")
     if kind.startswith("crate:"):
         c = data.CRATE_BY_KEY[kind[6:]]
         db.add_item(uid, kind, 1)

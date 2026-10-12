@@ -70,6 +70,7 @@ class AstroTweakin(commands.Bot):
         await self.load_extension("cogs.space")
         await self.load_extension("cogs.admin")
         await self.load_extension("cogs.features")
+        await self.load_extension("cogs.multi")
 
     async def sync_guild(self, guild):
         """Loads the slash commands into one server. Per-server syncing shows them instantly."""

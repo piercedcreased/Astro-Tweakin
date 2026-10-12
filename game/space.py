@@ -474,6 +474,8 @@ def _achieved(key, user, stats, tiers, found):
         "cardshark": s("jack_wins", 0) >= 25,
         "slugboss": user["slug_rank"] >= 4,
         "streak": s("calendar_weeks", 0) >= 1,
+        "rps": s("rps_wins", 0) >= 10,
+        "trader": s("market_sales", 0) >= 10,
     }[key]
 
 
@@ -512,7 +514,10 @@ def set_title(db, uid, key):
 
 
 def title_of(user):
-    a = data.ACH_BY_KEY.get(user["title"] or "")
+    t = user["title"] or ""
+    if t.startswith("custom:"):
+        return t[7:] or None
+    a = data.ACH_BY_KEY.get(t)
     return a.name if a else None
 
 
@@ -556,6 +561,7 @@ TIM_DEALS = {
     "box": ("📦", "Mystery Box", "Could be anything. Tim won't say. Tim doesn't know."),
     "snack": ("🍪", "Discount Snack", "Half price, no ores needed. Do not ask where it's been."),
     "rock": ("🪨", "Weird Rock", "\"Trust me bro.\" Tiny chance it's this planet's contraband."),
+    "tag": ("🏷️", "Shady Tag", "A tag Tim \"found\". Rename Tag, Enchant Reset Tag or Custom Title Tag, Tim's choice."),
     "fence": ("💼", "Fence Hot Cargo", f"Tim buys your cheapest Legendary+ ore (not contraband, not locked) for x{data.TIM_FENCE_MULT} its value. No cops asked."),
 }
 
@@ -581,6 +587,8 @@ def tim_price(user, deal, visit):
         return snack_cost(user, data.SNACKS[visit["snack"] % len(data.SNACKS)])[0] // 2
     if deal == "rock":
         return 20_000 * s
+    if deal == "tag":
+        return 40_000 * s
     return 0
 
 
@@ -618,6 +626,11 @@ def tim_buy(db, uid, visit_id, idx):
         snack = data.SNACKS[visit["snack"] % len(data.SNACKS)]
         db.add_item(uid, "snack:" + snack.key, 1)
         return True, f"🍪 You got {snack.emoji} **{snack.name}** for {price:,} coins. It's a little warm.", None
+    if deal == "tag":
+        from . import multi
+        tag = multi.random_tag()
+        db.add_item(uid, "tag:" + tag.key, 1)
+        return True, f"🏷️ Tim slides you a {tag.emoji} **{tag.name}**. \"Don't ask where it was.\"", None
     if deal == "rock":
         if rng.random() < data.TIM_WEIRD_ROCK_CHANCE:
             ore = next((o for o in data.ORES if o.tier == "contraband" and user["layer"] in o.layers), None)

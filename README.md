@@ -43,6 +43,15 @@ Also `/travel` (jump to any place you've unlocked), `/index`, `/profile`, `/lead
 | 🃏 Space Jack | Blackjack vs Tim in the 🎮 Arcade. Unfinished hands are refunded if the bot restarts. |
 | 📜 Bounties | Daily, weekly and monthly boards with page buttons. |
 
+**v0.8.0 (Multiplayer)**
+
+| | |
+|---|---|
+| 🪨 `/rps @player [bet]` | Hidden picks shown as ❓/❗ between both profile pictures, revealed when both have chosen. Ties replay. The bet is only moved at the end, in one transaction. |
+| 🏪 `/market` | Player shop. Listed items are held by the Market (`market` table) until sold, cancelled or 48h pass. 5% fee (`MARKET_TAX`), 8 listings each. |
+| 🏷️ `/tags` | Pickaxe Rename, Enchant Reset and Custom Title tags (`TAGS`). From Cosmic/Tweaked crates and Tim's Shady Tag deal. |
+| 💸 `/pay` | Send coins to another player. |
+
 **Chat commands** start with `;` (change it with `COMMAND_PREFIX` in `.env`): `;mine ;inv ;shop ;mines ;player ;bal ;daily ;lb ;bounties ;snacks ;ship ;help`, plus a `;` version of every slash command (`;raid @player`, `;duel @player 500`, `;travel 3`, `;crates`...). They need **Message Content Intent** switched on in the Discord developer portal (Bot → Privileged Gateway Intents); without it the bot still starts, just without `;` commands.
 
 **Owner tools:** `/alcad` (owners only, hidden from everyone without Administrator) shows usage stats across your servers (most-used commands and buttons, most active players and what they use, per server, or one member with `member:`) and the error log with `show: errors`. Owners are `ADMIN_USER_IDS` in `.env` or the bot's owner in the developer portal. `/admin give`, `event`, `meteor`, `tim`, `cops`, `backup` and `restart` are owners-only too, since every server shares one save.

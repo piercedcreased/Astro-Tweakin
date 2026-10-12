@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from game import data, engine, images, space
+from game import data, engine, images, multi, space
 from game.db import NotEnough
 from game.data import LAYERS, ORE_BY_KEY, PARTS, PART_BY_KEY, PICKAXE_BY_KEY, PLANETS, TIERS, TIER_ORDER
 from game.engine import fmt_chance, fmt_time
@@ -220,7 +220,7 @@ class Game(commands.Cog):
         lines += [
             f"💰 **{user['coins']:,}** coins",
             f"{layer.realm_info.emoji} {layer.realm_info.name}  ·  {layer.planet_info.emoji} **{layer.planet_info.name}**  ·  🕳️ {layer.name}",
-            f"⛏️ {pick.name}",
+            f"⛏️ {multi.pick_name(user)}",
             f"🍀 Luck **x{luck.total:,.2f}**  ·  {engine.rolls_for(self.db, user, buffs)} ore/swing",
         ]
         buffs = {k: v for k, v in buffs.items() if k in self.BUFF_NAMES}
@@ -363,6 +363,7 @@ class Game(commands.Cog):
         day, wait, _ = engine.calendar_state(user)
         v.add_item(B("cal", uid, f"Daily (day {day} ready!)" if wait <= 0 else "Daily", "📅",
                      discord.ButtonStyle.success if wait <= 0 else discord.ButtonStyle.secondary))
+        v.add_item(B("mkt", uid, "Market", "🏪", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
         return e, [], v
 
@@ -421,6 +422,7 @@ class Game(commands.Cog):
         v.add_item(B("sl", uid, "Slug Den", "🐌", row=1))
         v.add_item(B("cr", uid, "Crates", "📦", row=1))
         v.add_item(B("back", uid, "Back", "↩️", row=1))
+        v.add_item(B("mkt", uid, "Market", "🏪", discord.ButtonStyle.primary, row=2))
         goals = engine.goals(self.db, uid)
         key = f"shop:{user['coins']}:{nxt.key if nxt else ''}:{goals}"
         files = [Pic("shop.jpg", key, lambda: images.shop_banner(user["coins"], goals, nxt))]
@@ -504,6 +506,9 @@ class Game(commands.Cog):
                 by_tier["special"].append((c.price or 10 ** 9, f"{c.emoji} {c.name} x{q:,}"))
             elif kind == "rock":
                 by_tier["special"].append((10 ** 10, f"💎 Enchanted Crack Rock x{q:,}"))
+            elif kind == "tag":
+                t = data.TAG_BY_KEY[key]
+                by_tier["special"].append((10 ** 11, f"{t.emoji} {t.name} x{q:,}"))
         for t in ["special", "muts"] + list(reversed(TIER_ORDER)) + ["bars", "parts", "snacks"]:
             if by_tier.get(t):
                 name = {"bars": "🧱 Bars", "parts": "🔧 Ship parts", "snacks": "🍬 Snacks", "muts": "🧬 Mutations",
@@ -523,6 +528,9 @@ class Game(commands.Cog):
         v.add_item(B("back", uid, "Back", "↩️"))
         v.add_item(B("cr", uid, "Crates", "📦", row=3))
         v.add_item(B("en", uid, "Enchant", "✨", row=3))
+        n_tags = sum(q for i, q in items.items() if i.startswith("tag:"))
+        v.add_item(B("tags", uid, f"Tags ({n_tags})" if n_tags else "Tags", "🏷️", row=3))
+        v.add_item(B("mkt", uid, "Market", "🏪", row=3))
         sellable = [(i, q) for i, q in items.items() if i.split(":", 1)[0] in ("ore", "bar", "mut") and i not in locked]
         if sellable:
             # commonest first: that's usually what you want gone
@@ -663,7 +671,10 @@ class Game(commands.Cog):
         if sp and await sp.dispatch(interaction, action, uid):
             return
         ft = self.bot.get_cog("Features")
-        if not (ft and await ft.dispatch(interaction, action, uid)):
+        if ft and await ft.dispatch(interaction, action, uid):
+            return
+        mp = self.bot.get_cog("Multi")
+        if not (mp and await mp.dispatch(interaction, action, uid)):
             await self.ack(interaction)
 
     async def show(self, interaction, panel):
@@ -987,7 +998,7 @@ class Game(commands.Cog):
         if space.title_of(user):
             e.description = f"🏷️ *{space.title_of(user)}*"
         e.add_field(name="Coins", value=f"{user['coins']:,}")
-        e.add_field(name="Pickaxe", value=PICKAXE_BY_KEY[user["pickaxe"]].name)
+        e.add_field(name="Pickaxe", value=multi.pick_name(user))
         e.add_field(name="Deepest layer", value=LAYERS[user["max_layer"] - 1].name)
         e.add_field(name="Ores mined", value=f"{user['total_mined']:,}")
         e.add_field(name="Index", value=f"{len(found)}/{len(data.ORES)}")
@@ -1228,6 +1239,7 @@ class Game(commands.Cog):
             "🚀 **/ship** upgrades your ship · 🏴‍☠️ **/raid** someone's ship for stuff they forgot (they lose nothing) · "
             "⚔️ **/duel** for coins\n"
             "🍬 **/snacks** for boosts · 📜 **/bounties** daily jobs · 🏆 **/achievements** and **/title**\n"
+            "🏪 **/market** buy and sell with other players · 🪨 **/rps** @player [bet] · 💸 **/pay** · 🏷️ **/tags**\n"
             "☄️ A **meteor** hits once a day and 👽 **Tweaker Tim** drops by a few times a day in the announce channel.\n\n"
             "Every planet hides one ultra-rare piece of 🚨 **contraband**. Legendary and rarer finds "
             "get a special animation and get announced to the server.\n"
@@ -1336,6 +1348,27 @@ class Game(commands.Cog):
     async def p_finds(self, ctx):
         await self._run(ctx, "Game", "finds")
 
+    @commands.command(name="rps")
+    async def p_rps(self, ctx, member: discord.Member, bet: int = 0):
+        await self._run(ctx, "Multi", "rps_cmd", member, max(0, bet))
+
+    @commands.command(name="pay", aliases=["give"])
+    async def p_pay(self, ctx, member: discord.Member, amount: str):
+        from cogs.multi import parse_amount
+        n = parse_amount(amount)
+        if not n:
+            await ctx.reply("Use it like `;pay @player 5000` (5k and 1.5m work too)", mention_author=False)
+            return
+        await self._run(ctx, "Multi", "pay_cmd", member, n)
+
+    @commands.command(name="market", aliases=["mkt", "ah", "auction"])
+    async def p_market(self, ctx):
+        await self._run(ctx, "Multi", "market_cmd")
+
+    @commands.command(name="tags", aliases=["tag"])
+    async def p_tags(self, ctx):
+        await self._run(ctx, "Multi", "tags_cmd")
+
     @commands.command(name="weather", aliases=["w"])
     async def p_weather(self, ctx):
         await self._run(ctx, "Features", "weather_cmd")
@@ -1388,7 +1421,8 @@ class Game(commands.Cog):
         if isinstance(error, (commands.CheckFailure, commands.CommandNotFound)):
             return
         if isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
-            usage = {"raid": ";raid @player", "duel": ";duel @player [bet]", "travel": ";travel <layer number>",
+            usage = {"raid": ";raid @player", "duel": ";duel @player [bet]", "rps": ";rps @player [bet]",
+                     "pay": ";pay @player <amount>", "travel": ";travel <layer number>",
                      "ore": ";ore <name>", "lock": ";lock <item name>", "title": ";title <achievement name>"}
             try:
                 await ctx.reply(f"Use it like `{usage.get(ctx.command.name, ';' + ctx.command.name)}`", mention_author=False)

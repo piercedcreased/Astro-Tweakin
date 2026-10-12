@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS usage (
     action TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS usage_at ON usage (at);
+CREATE TABLE IF NOT EXISTS market (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller INTEGER NOT NULL,
+    item TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    price INTEGER NOT NULL,
+    listed REAL NOT NULL,
+    expires REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    buyer INTEGER,
+    done_at REAL,
+    seen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS market_open ON market (status, expires);
 CREATE TABLE IF NOT EXISTS claims (
     kind TEXT NOT NULL,
     event INTEGER NOT NULL,
@@ -158,6 +172,7 @@ MIGRATIONS = [
     ("users", "slug_rank", "INTEGER NOT NULL DEFAULT 0"),         # v0.7.0 slugling prestige
     ("users", "slug_pack", "INTEGER NOT NULL DEFAULT 0"),         # v0.7.0 Bigger Backpacks level
     ("users", "mg_count", "INTEGER NOT NULL DEFAULT 0"),          # v0.7.0 presses since the last minigame
+    ("users", "pick_name", "TEXT"),                               # v0.8.0 Pickaxe Rename Tag
 ]
 
 

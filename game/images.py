@@ -1209,6 +1209,7 @@ def _crate_icon(size, color, emblem="?"):
 _LOOT_STYLE = {
     "coins": ((240, 190, 40), "coin"), "snack": ((255, 150, 60), "snack"), "roll": ((90, 210, 90), "clover"),
     "ores": ((150, 200, 255), "pick"), "mut": ((255, 120, 220), "dna"), "crack": ((180, 120, 255), "gem"),
+    "tag": ((90, 220, 190), "tag"),
 }
 
 
@@ -1232,6 +1233,12 @@ def _loot_cell(kind, size=96):
     if icon == "snack":
         d.rounded_rectangle([cx - s * .6, cy - s * .7, cx + s * .6, cy + s * .7], radius=8, fill=(255, 170, 70), outline=(120, 60, 10), width=3)
         d.text((cx, cy), "YUM", font=font(int(s * .45)), fill=(120, 60, 10), anchor="mm")
+    elif icon == "tag":
+        d.polygon([(cx - s * .8, cy - s * .45), (cx + s * .35, cy - s * .45), (cx + s * .85, cy),
+                   (cx + s * .35, cy + s * .45), (cx - s * .8, cy + s * .45)], fill=(120, 240, 210), outline=(20, 90, 75))
+        d.ellipse([cx + s * .2, cy - s * .12, cx + s * .44, cy + s * .12], fill=_dark(color, 0.55))
+        d.line([(cx - s * .6, cy - s * .1), (cx, cy - s * .1)], fill=(20, 90, 75), width=3)
+        d.line([(cx - s * .6, cy + s * .15), (cx - s * .1, cy + s * .15)], fill=(20, 90, 75), width=3)
     elif icon == "gem":
         d.polygon([(cx, cy - s * .8), (cx + s * .7, cy - s * .1), (cx, cy + s * .8), (cx - s * .7, cy - s * .1)],
                   fill=(190, 140, 255), outline=(80, 40, 140))
@@ -1244,7 +1251,7 @@ def _loot_cell(kind, size=96):
 
 
 LOOT_NAMES = {"coins": "COINS", "snack": "SNACKS", "roll": "LUCKY ROLL", "ores": "ORE HAUL", "mut": "MUTATED ORE",
-              "crack": "CRACK ROCK"}
+              "crack": "CRACK ROCK", "tag": "RARE TAG"}
 
 
 def crate_gif(crate, result_kind):
@@ -1335,3 +1342,103 @@ def calendar_card(today, done_upto, ready, rewards):
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=85)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------- v0.8.0 Rock Paper Scissors
+
+def _avatar_circle(png, size, seed):
+    """A player's profile picture cut into a circle (a coloured blob with a slug face if it couldn't be loaded)."""
+    img = None
+    if png:
+        try:
+            img = Image.open(io.BytesIO(png)).convert("RGBA").resize((size, size), Image.LANCZOS)
+        except Exception:
+            img = None
+    if img is None:
+        r = random.Random(seed)
+        col = tuple(int(c * 255) for c in colorsys.hsv_to_rgb(r.random(), 0.55, 0.85))
+        img = Image.new("RGBA", (size, size), col)
+        d = ImageDraw.Draw(img)
+        d.ellipse([size * .3, size * .35, size * .42, size * .5], fill=(20, 20, 20))
+        d.ellipse([size * .58, size * .35, size * .7, size * .5], fill=(20, 20, 20))
+        d.arc([size * .3, size * .45, size * .7, size * .75], 20, 160, fill=(20, 20, 20), width=max(3, size // 30))
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse([0, 0, size - 1, size - 1], fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    return out
+
+
+def _rps_hand(d, kind, cx, cy, s):
+    """Rock, paper or scissors drawn in a box s wide."""
+    if kind == "r":
+        r = random.Random(7)
+        pts = [(cx + math.cos(a) * s * r.uniform(.36, .44), cy + math.sin(a) * s * r.uniform(.30, .38))
+               for a in [i * math.pi * 2 / 10 for i in range(10)]]
+        d.polygon(pts, fill=(130, 125, 135), outline=(50, 48, 55), width=4)
+        d.polygon([(cx - s * .25, cy - s * .2), (cx - s * .05, cy - s * .28), (cx + s * .05, cy - s * .12), (cx - s * .15, cy - s * .05)],
+                  fill=(175, 170, 180))
+        d.line([(cx + s * .05, cy + s * .05), (cx + s * .2, cy + s * .15), (cx + s * .15, cy + s * .25)], fill=(60, 58, 65), width=3)
+    elif kind == "p":
+        w, h = s * .62, s * .78
+        x0, y0 = cx - w / 2, cy - h / 2
+        f = s * .16
+        d.polygon([(x0, y0), (x0 + w - f, y0), (x0 + w, y0 + f), (x0 + w, y0 + h), (x0, y0 + h)],
+                  fill=(245, 245, 240), outline=(90, 90, 100), width=3)
+        d.polygon([(x0 + w - f, y0), (x0 + w - f, y0 + f), (x0 + w, y0 + f)], fill=(200, 200, 205), outline=(90, 90, 100))
+        for i in range(5):
+            y = y0 + h * (0.28 + i * 0.14)
+            d.line([(x0 + w * .12, y), (x0 + w * .85, y)], fill=(120, 160, 230), width=3)
+    else:
+        blade = (215, 220, 230)
+        d.polygon([(cx - s * .08, cy + s * .05), (cx + s * .38, cy - s * .38), (cx + s * .02, cy + s * .1)], fill=blade, outline=(70, 75, 90))
+        d.polygon([(cx + s * .08, cy + s * .05), (cx - s * .38, cy - s * .38), (cx - s * .02, cy + s * .1)], fill=blade, outline=(70, 75, 90))
+        for sx in (-1, 1):
+            hx, hy = cx + sx * s * .17, cy + s * .26
+            d.ellipse([hx - s * .14, hy - s * .12, hx + s * .14, hy + s * .12], outline=(220, 50, 60), width=max(5, int(s * .07)))
+        d.ellipse([cx - s * .04, cy + s * .02, cx + s * .04, cy + s * .1], fill=(60, 60, 70))
+
+
+def rps_card(names, avatars, states, winner=None, tie=False, banner=None):
+    """[avatar] [status] VS [status] [avatar]. states: per side "wait" (❓), "ready" (❗) or a pick r/p/s (revealed).
+    winner: 0/1 to crown a side. names/avatars: lists of 2."""
+    W, H, A, BOX = 640, 250, 140, 110
+    img = _space_bg(W, H, "rps" + "".join(names), top=(16, 12, 34), bottom=(36, 18, 56), stars=50).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    _outlined(d, (W / 2, 24), banner or "ROCK  PAPER  SCISSORS", _fit(banner or "ROCK  PAPER  SCISSORS", W - 40, 26), (255, 230, 120), stroke=3)
+    cy = 125
+    for side in (0, 1):
+        ax = 24 if side == 0 else W - 24 - A
+        av = _avatar_circle(avatars[side], A, names[side])
+        lost = winner is not None and winner != side
+        if lost:
+            av = Image.blend(av, Image.new("RGBA", av.size, (0, 0, 0, 0)), 0.0)
+            grey = av.convert("LA").convert("RGBA")
+            grey.putalpha(av.getchannel("A"))
+            av = grey
+        ring = (255, 205, 60) if winner == side else (90, 80, 130)
+        d.ellipse([ax - 5, cy - A / 2 - 5, ax + A + 5, cy + A / 2 + 5], fill=ring)
+        img.paste(av, (ax, int(cy - A / 2)), av)
+        d = ImageDraw.Draw(img)
+        nm = safe_name(names[side], "PLAYER " + str(side + 1)).upper()
+        _outlined(d, (ax + A / 2, cy + A / 2 + 22), nm, _fit(nm, A + 40, 20), (255, 255, 255), stroke=3)
+        if winner == side:
+            _outlined(d, (ax + A / 2, cy - A / 2 - 2), "WINNER", 22, (255, 215, 70), stroke=4)
+        # status box between the avatars
+        bx = 190 if side == 0 else W - 190 - BOX
+        st = states[side]
+        if st in ("r", "p", "s"):
+            fill, edge = (40, 34, 70), (255, 215, 70) if winner == side else (150, 140, 200)
+        elif st == "ready":
+            fill, edge = (30, 90, 50), (90, 230, 120)
+        else:
+            fill, edge = (45, 40, 70), (120, 110, 160)
+        d.rounded_rectangle([bx, cy - BOX / 2, bx + BOX, cy + BOX / 2], radius=18, fill=fill, outline=edge, width=5)
+        if st in ("r", "p", "s"):
+            _rps_hand(d, st, bx + BOX / 2, cy, BOX * 0.95)
+        elif st == "ready":
+            _outlined(d, (bx + BOX / 2, cy), "!", 80, (120, 255, 150), stroke=5)
+        else:
+            _outlined(d, (bx + BOX / 2, cy), "?", 80, (200, 190, 240), stroke=5)
+    _outlined(d, (W / 2, cy), "TIE" if tie else "VS", 30 if tie else 34, (255, 120, 120) if tie else (255, 255, 255), stroke=4)
+    return _png(img.convert("RGB"))

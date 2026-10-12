@@ -589,6 +589,8 @@ def item_name(item):
         if key != "crack":
             raise KeyError(key)
         return "Enchanted Crack Rock"
+    if kind == "tag":
+        return data.TAG_BY_KEY[key].name
     return data.BARS[key][0]
 
 

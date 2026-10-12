@@ -605,6 +605,8 @@ ACHIEVEMENTS += [
     Achievement("cardshark", "Card Shark", "🃏", "Win 25 hands of Space Jack"),
     Achievement("slugboss", "Slug Tycoon", "🐌", "Prestige your sluglings to Cosmic Slugs"),
     Achievement("streak", "Creature of Habit", "📅", "Claim day 7 of the daily calendar"),
+    Achievement("rps", "Rock Solid", "✊", "Win 10 games of Rock Paper Scissors"),
+    Achievement("trader", "Space Merchant", "🏪", "Sell 10 things on the Market"),
 ]
 ACH_BY_KEY = {a.key: a for a in ACHIEVEMENTS}
 
@@ -686,9 +688,9 @@ CRATES = [
         ("coins", 45, 2.0), ("snack", 25, 1), ("roll", 12, 1), ("ores", 15, 15.0), ("crack", 2, 1), ("crate:cosmic", 1, 1))),
     Crate("cosmic", "Cosmic Crate", "🌌", (120, 110, 255), 50_000, (
         ("coins", 35, 12.0), ("snack", 20, 3), ("roll", 10, 1), ("ores", 22, 60.0), ("mut", 6, 1), ("crack", 5, 1),
-        ("crate:tweaked", 2, 1))),
+        ("tag", 4, 1), ("crate:tweaked", 2, 1))),
     Crate("tweaked", "Tweaked Crate", "🌀", (255, 80, 200), 0, (
-        ("coins", 30, 80.0), ("ores", 25, 400.0), ("mut", 25, 1), ("crack", 15, 1), ("snack", 5, 5))),
+        ("coins", 30, 80.0), ("ores", 25, 400.0), ("mut", 25, 1), ("crack", 15, 1), ("snack", 5, 5), ("tag", 12, 1))),
 ]
 CRATE_BY_KEY = {c.key: c for c in CRATES}
 
@@ -718,3 +720,36 @@ MINIGAME_PITY = 250                       # guaranteed after this many presses w
 # ---- Space Jack (blackjack against Tim)
 JACK_BETS = (1, 5, 25)                    # x JACK_BASE x layer scale
 JACK_BASE = 1_000
+
+
+# ---- v0.8.0 multiplayer
+# Tags: special items you use from the Inventory (🏷️ Tags) or trade on the Market.
+@dataclass(frozen=True)
+class Tag:
+    key: str
+    name: str
+    emoji: str
+    desc: str
+
+
+TAGS = [
+    Tag("rename", "Pickaxe Rename Tag", "🏷️", "Give your pickaxe its own name. It keeps the name through upgrades."),
+    Tag("enchreset", "Enchant Reset Tag", "🔄", "Gives every enchanted slot a fresh reroll (the one 10k reroll comes back)."),
+    Tag("title", "Custom Title Tag", "📛", "Wear a title you write yourself instead of an achievement."),
+]
+TAG_BY_KEY = {t.key: t for t in TAGS}
+TAG_WEIGHTS = {"rename": 40, "enchreset": 35, "title": 25}   # how often each comes out of crates and Tim
+PICK_NAME_MAX = 32
+TITLE_MAX = 24
+
+# Rock Paper Scissors
+RPS = {"r": ("🪨", "Rock"), "p": ("📄", "Paper"), "s": ("✂️", "Scissors")}
+RPS_BEATS = {"r": "s", "p": "r", "s": "p"}
+RPS_TIMEOUT = 300                # seconds both players get to pick before the game is called off
+
+# Market (player shop)
+MARKET_TAX = 0.05                # cut taken from the seller's coins when something sells
+MARKET_HOURS = 48                # listings come back to the seller after this
+MARKET_MAX_LISTINGS = 8          # open listings per player
+MARKET_MAX_PRICE = 10 ** 15
+MARKET_PAGE = 6

@@ -77,7 +77,7 @@ class Features(commands.Cog):
         rocks = self.db.qty(uid, data.CRACK_ROCK)
         cracking = self.cracking.get(uid)
         cost = features.enchant_cost(user)
-        e = discord.Embed(title=f"✨ Enchant your {pick.name}", color=PURPLE)
+        e = discord.Embed(title=f"✨ Enchant your {user['pick_name'] or pick.name}"[:256], color=PURPLE)
         lines = [note + "\n"] if note else []
         if cracking is not None:
             lines.append("💎 **Pick the slots to empty**, then press **Done**. The Crack Rock is only used up when you press Done.")
@@ -294,7 +294,8 @@ class Features(commands.Cog):
             (note + "\n\n" if note else "") +
             "🃏 **Space Jack**: blackjack against Tweaker Tim. Get closer to 21 than him without going over. "
             "Blackjack pays 3:2.\n"
-            "☄️ **Asteroid Run**: steer through falling rocks to Tim's station (also in 🚀 Ship)."))
+            "☄️ **Asteroid Run**: steer through falling rocks to Tim's station (also in 🚀 Ship).\n"
+            "🪨 **Rock Paper Scissors**: challenge a friend with `/rps @player [bet]`."))
         e.set_footer(text=f"You have {user['coins']:,} coins")
         v = discord.ui.View(timeout=None)
         for m in data.JACK_BETS:
