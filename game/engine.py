@@ -761,8 +761,12 @@ def slugs_waiting(db, user, now=None):
 
 
 def slug_output(db, user, elapsed):
-    """Ores the crew digs in `elapsed` seconds: 1 a minute each, x their rank's speed and the Whisperer enchant."""
+    """Ores the crew digs in `elapsed` seconds: 1 a minute each, x their rank's speed, the Whisperer enchant
+    and Double Dig (if it's running when you collect)."""
     per = data.SLUG_RANKS[user["slug_rank"]][2] * enchant_bonus(db, user["id"], "whisperer")
+    dig = db.buffs(user["id"]).get("rolls")
+    if dig:
+        per *= dig[0]
     return int(elapsed // data.SLUGLING_SECONDS_PER_ROLL * user["sluglings"] * per)
 
 
